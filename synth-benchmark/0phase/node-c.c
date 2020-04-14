@@ -68,7 +68,9 @@ volatile bool g_bRXFlag = 0;
 
 volatile bool g_tick = false;
 
-uint8_t g_sync_method = 0;
+//#define SYNC_0PHASE
+#define SYNC_PERIOD
+
 volatile uint8_t g_sync = 0;
 volatile uint8_t g_reset = 0;
 
@@ -141,7 +143,10 @@ void
 CAN0IntHandler(void)
 {
     uint32_t ui32Status;
+
+#if defined(SYNC_0PHASE)
     uint32_t timer_val;
+#endif
 
     ROM_IntMasterDisable();
 
@@ -188,7 +193,7 @@ CAN0IntHandler(void)
 
         g_bRXFlag = true;
 
-        if ( g_sync_method == 0 ) {
+#if defined(SYNC_0PHASE)
             timer_val = TimerLoadGet(TIMER1_BASE, TIMER_A);
             TimerLoadSet(TIMER1_BASE, TIMER_A, LATENCY_8B_MAX);
             if (timer_val == 0) {
@@ -197,7 +202,7 @@ CAN0IntHandler(void)
             } else {
                 g_msg_since_idle++;
             }
-        }
+#endif
 
         g_ui32ErrFlag = 0;
     }
@@ -304,6 +309,7 @@ Timer0IntHandler(void)
     ROM_TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
     g_tick = true;
 
+#if defined(SYNC_0PHASE) || defined(SYNC_PERIOD)
     if (g_sync == 2) {
         TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
 
@@ -313,6 +319,8 @@ Timer0IntHandler(void)
         //    g_sync = 0;
         //}
     }
+#endif
+
 }
 
 void
@@ -758,12 +766,14 @@ main(void)
 
     ROM_TimerEnable(TIMER0_BASE, TIMER_A);
 
-    if ( g_sync_method == 0 ) {
+
+#if defined(SYNC_0PHASE)
         TimerLoadSet(TIMER1_BASE, TIMER_A, LATENCY_8B_MAX);
         //IntEnable(INT_TIMER1A);
         //TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
         ROM_TimerEnable(TIMER1_BASE, TIMER_A);
-    }
+#endif
+
 
     //
     // Loop forever while the timers run.
@@ -816,7 +826,8 @@ main(void)
             }
 
             if (g_sCAN0RxMessage.ui32MsgID == TARGET_ID && g_sCAN0RxMessage.ui32MsgLen == 8) {
-                if (g_sync_method == 0 && g_sync != 1) {
+#if defined(SYNC_0PHASE)
+                if (g_sync != 1) {
                     if (g_sync > 3) g_sync--;
                     else if (g_msg_since_idle < g_sync_since_idle) {
                         TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL-DIFFERENCE-LATENCY_8B_MAX); /* re-synch */
@@ -824,6 +835,15 @@ main(void)
                         g_sync = 2;
                     }
                 }
+#elif defined(SYNC_PERIOD)
+                if (g_sync != 1) {
+                    if (g_sync > 3) g_sync--;
+                    else {
+                        TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL-DIFFERENCE-LATENCY_8B_MAX); /* re-synch */
+                        g_sync = 2;
+                    }
+                }
+#endif /* SYNC */
             } else if (g_sCAN0RxMessage.ui32MsgID == 0xff) {
                 UARTprintf("%d\tRESET\n", count);
                 g_sync = 4;
