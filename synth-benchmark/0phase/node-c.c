@@ -68,8 +68,8 @@ volatile bool g_bRXFlag = 0;
 
 volatile bool g_tick = false;
 
-//#define SYNC_0PHASE
-#define SYNC_PERIOD
+#define SYNC_0PHASE
+//#define SYNC_PERIOD
 
 volatile uint8_t g_sync = 0;
 volatile uint8_t g_reset = 0;
