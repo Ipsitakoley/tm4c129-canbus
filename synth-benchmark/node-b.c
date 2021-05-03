@@ -65,6 +65,7 @@ volatile uint32_t g_ui32RXCount = 0;
 //
 //*****************************************************************************
 volatile bool g_bRXFlag = 0;
+volatile bool g_bTXFlag = 0;
 
 volatile bool g_tick = false;
 
@@ -194,7 +195,7 @@ CAN0IntHandler(void)
         // flags to indicate when a message is transmitted.
         //
         g_ui32TXMsgCount++;
-
+        g_bTXFlag = true;
         //
         // Since a message was transmitted, clear any error flags.
         // This is done because before the message is transmitted it triggers
@@ -365,7 +366,7 @@ InitCAN0(void)
 
     g_sCAN0TxMessage_5.ui32MsgID = 0x11;
     g_sCAN0TxMessage_5.ui32MsgIDMask = 0;
-    g_sCAN0TxMessage_5.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
     g_sCAN0TxMessage_5.ui32MsgLen = sizeof(g_ui8TXMsgData_5);
     g_sCAN0TxMessage_5.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5;
 
@@ -657,6 +658,8 @@ int
 main(void)
 {
     int count;
+    uint32_t rec, tec;
+
     //
     // Enable lazy stacking for interrupt handlers.  This allows floating-point
     // instructions to be used within interrupt handlers, but at the expense of
@@ -729,9 +732,13 @@ main(void)
         if( g_tick == true ) {
             g_tick = false;
 
-            count = g_ui32TXCount++;
+            send_messages(++count);
+        }
 
-            send_messages(count);
+        if (g_bTXFlag) {
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+            g_bTXFlag = false;
         }
 
         //
@@ -772,17 +779,11 @@ main(void)
             }
 
             if (g_sCAN0RxMessage.ui32MsgID == 0x07 && g_reset == 0) {
-                uint32_t rec, tec;
-
                 CANMessageSet(CAN0_BASE, TXOBJECT_5, &g_sCAN0TxMessage_5,
                               MSG_OBJ_TYPE_TX);
-
-                CANErrCntrGet(CAN0_BASE, &rec, &tec);
-                UARTprintf("%d\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-
-
             } else if (g_sCAN0RxMessage.ui32MsgID == 0xff) {
                 UARTprintf("\tRESET\n");
+                count = 0;
                 ResetCAN0();
                 g_reset = 0;
             }

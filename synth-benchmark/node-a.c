@@ -40,7 +40,8 @@
 #include "driverlib/rom_map.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/timer.h"
-
+#include "driverlib/uart.h"
+#include "utils/uartstdio.h"
 
 //*****************************************************************************
 //
@@ -63,8 +64,11 @@ volatile uint32_t g_ui32RXCount = 0;
 //
 //*****************************************************************************
 volatile bool g_bRXFlag = 0;
+volatile bool g_bTXFlag = 0;
 
 volatile bool g_tick = false;
+
+volatile uint8_t g_reset = 0;
 
 //*****************************************************************************
 //
@@ -192,6 +196,7 @@ CAN0IntHandler(void)
         // flags to indicate when a message is transmitted.
         //
         g_ui32TXMsgCount++;
+        g_bTXFlag = true;
 
         //
         // Since a message was transmitted, clear any error flags.
@@ -203,7 +208,13 @@ CAN0IntHandler(void)
     }
     else if (ui32Status == TXOBJECT_10) {
             CANIntClear(CAN0_BASE, TXOBJECT_10);
+            g_bTXFlag = true;
             g_ui32ErrFlag = 0;
+    }
+    else if (ui32Status == TXOBJECT_1000) {
+        CANIntClear(CAN0_BASE, TXOBJECT_1000);
+        g_bTXFlag = true;
+        g_ui32ErrFlag = 0;
     }
     else
     {
@@ -240,10 +251,20 @@ __error__(char *pcFilename, uint32_t ui32Line)
 }
 #endif
 
+void ResetCAN0(void)
+{
+    CANInit(CAN0_BASE);
+    CANBitRateSet(CAN0_BASE, g_ui32SysClock, BITRATE);
+    CANIntEnable(CAN0_BASE, CAN_INT_MASTER | CAN_INT_ERROR | CAN_INT_STATUS);
+    IntEnable(INT_CAN0);
+    CANEnable(CAN0_BASE);
+    CANMessageSet(CAN0_BASE, RXOBJECT, &g_sCAN0RxMessage, MSG_OBJ_TYPE_RX);
+}
+
 void
 send_messages(int count)
 {
-    if ( count % 2 == 0 ) {
+    if ( count % 2 == 0 && g_reset == 0 ) {
         CANMessageSet(CAN0_BASE, TXOBJECT_5, &g_sCAN0TxMessage_5,
                           MSG_OBJ_TYPE_TX);
 
@@ -251,7 +272,10 @@ send_messages(int count)
                   MSG_OBJ_TYPE_TX);
     }
 
-    if ( count % 400 == 0 ) {
+    if ( count % 1000 == 0 ) {
+        UARTprintf("\tRESET\n");
+        ResetCAN0();
+        g_reset = 0;
         CANMessageSet(CAN0_BASE, TXOBJECT_1000, &g_sCAN0TxMessage_1000,
                   MSG_OBJ_TYPE_TX);
 
@@ -360,13 +384,13 @@ InitCAN0(void)
 
     g_sCAN0TxMessage_5.ui32MsgID = 0x07;
     g_sCAN0TxMessage_5.ui32MsgIDMask = 0;
-    g_sCAN0TxMessage_5.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_5.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
     g_sCAN0TxMessage_5.ui32MsgLen = sizeof(g_ui8TXMsgData_5);
     g_sCAN0TxMessage_5.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5;
 
     g_sCAN0TxMessage_10.ui32MsgID = 0x09;
     g_sCAN0TxMessage_10.ui32MsgIDMask = 0;
-    g_sCAN0TxMessage_10.ui32Flags = 0; //MSG_OBJ_TX_INT_ENABLE;
+    g_sCAN0TxMessage_10.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
     g_sCAN0TxMessage_10.ui32MsgLen = sizeof(g_ui8TXMsgData_10);
     g_sCAN0TxMessage_10.pui8MsgData = (uint8_t *)&g_ui8TXMsgData_10;
 
@@ -404,6 +428,8 @@ InitCAN0(void)
 void
 CANErrorHandler(void)
 {
+    uint32_t ui32Status;
+
     //
     // CAN controller has entered a Bus Off state.
     //
@@ -412,9 +438,15 @@ CANErrorHandler(void)
         //
         // Handle Error Condition here
         //
-        //UARTprintf("    ERROR: CAN_STATUS_BUS_OFF \n");
-// TODO: LED Status?
+        UARTprintf("ERROR: CAN_STATUS_BUS_OFF\n");
         GPIOPinWrite(GPIO_PORTN_BASE, GPIO_PIN_0, 1);
+        CANEnable(CAN0_BASE);
+        do {
+            ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
+        } while ( ui32Status & CAN_STATUS_BUS_OFF);
+
+         g_reset = 1;
+
         //
         // Clear CAN_STATUS_BUS_OFF Flag
         //
@@ -619,11 +651,23 @@ CANErrorHandler(void)
     }
 }
 
+void
+ConfigureUART2(void)
+{
+    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_UART2);
+    ROM_GPIOPinConfigure(GPIO_PD4_U2RX);
+    ROM_GPIOPinConfigure(GPIO_PD5_U2TX);
+    ROM_GPIOPinTypeUART(GPIO_PORTD_BASE, GPIO_PIN_4 | GPIO_PIN_5);
+    UARTStdioConfig(2, 115200, g_ui32SysClock);
+}
 
 int
 main(void)
 {
     int count;
+    uint32_t rec, tec;
+
     //
     // Enable lazy stacking for interrupt handlers.  This allows floating-point
     // instructions to be used within interrupt handlers, but at the expense of
@@ -639,8 +683,6 @@ main(void)
                                              SYSCTL_USE_PLL |
                                              SYSCTL_CFG_VCO_480), 120000000);
 
-
-    // TODO: Refactor below: InitLEDs()
     //
     // Enable the GPIO port that is used for the on-board LEDs.
     //
@@ -683,6 +725,8 @@ main(void)
 
     InitCAN0();
 
+    ConfigureUART2();
+
     ROM_TimerEnable(TIMER0_BASE, TIMER_A);
     //ROM_TimerEnable(TIMER1_BASE, TIMER_A);
 
@@ -697,6 +741,12 @@ main(void)
             count = g_ui32TXCount++;
 
             send_messages(count);
+        }
+
+        if (g_bTXFlag) {
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+            g_bTXFlag = false;
         }
 
         //
