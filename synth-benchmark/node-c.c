@@ -92,7 +92,7 @@ volatile uint8_t g_sync_since_idle = 255;
 
 // TODO
 // set SKIP_ATTACK to 2 for 1 skip, 3 to skip 2, etc.
-#define SKIP_ATTACK 2
+#define SKIP_ATTACK 1
 volatile uint8_t g_skip_attack = SKIP_ATTACK;
 
 //#define RECESSIVE_ATTACK
@@ -969,7 +969,7 @@ main(void)
 #if defined(DISABLE_ABORT_RX_PRECEDED)
             if (g_sCAN0RxMessage.ui32MsgID == PRECEDED_ID ) {
                 volatile int delay = 0;
-                for (delay = 0; delay < 1000; delay++); /* FIXME: Fudge factor. */
+                for (delay = 0; delay < 500; delay++); /* FIXME: Fudge factor. */
                 CANMessageClear(CAN0_BASE, TXOBJECT_5);
             }
 #endif
