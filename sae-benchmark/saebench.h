@@ -1,6 +1,6 @@
 
 /*
- * Copyright (C) 2019, 2021 Regents of University of Colorado
+ * Copyright (C) 2021 Regents of University of Colorado
  * Written by Gedare Bloom <gbloom@uccs.edu>
  * All rights reserved.
  *
