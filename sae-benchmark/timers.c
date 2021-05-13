@@ -150,10 +150,37 @@ void delay_ticks(uint32_t ticks)
     delay_us(ticks/TICKS_PER_US);
 }
 
+static inline void got_CAN_msg_interrupt(void)
+{
+    uint32_t timer_val;
+
+    // This intends to count the number of messages since the last bus idle time.
+    // TODO: It is a crude hack that may need tuning by changing the LATENCY definition.
+    // A more clever solution would derive the expected timer value based on the length of
+    // the received message, but we won't actually know that until (a) after that message is
+    // received and (b) when the RX buffer is read in the main() busy-loop.
+    if (g_ui32ExpCtrl & SYNC_0PHASE) {
+        if (g_sync == SYNC_MODE_RESET) {
+            timer_val = TimerValueGet(TIMER2_BASE, TIMER_A);
+            if (g_target_id == TARGET_ID) {
+                TimerLoadSet(TIMER2_BASE, TIMER_A, TARGET_XMIT_TIME);
+            } else {
+                TimerLoadSet(TIMER2_BASE, TIMER_A, TARGET_XMIT_TIME_2);
+            }
+            TimerEnable(TIMER2_BASE, TIMER_A);
+            if (timer_val == 0) {
+                g_msg_since_idle = 0;
+            } else {
+                g_msg_since_idle++;
+            }
+        }
+    }
+
+}
+
 void CAN0IntHandler(void)
 {
     uint32_t ui32Status;
-    uint32_t timer_val;
 
     IntMasterDisable();
 
@@ -215,25 +242,7 @@ void CAN0IntHandler(void)
             g_bTXFlag = true;
         }
 
-        // This intends to count the number of messages since the last bus idle time.
-        // TODO: It is a crude hack that may need tuning by changing the LATENCY definition.
-        // A more clever solution would derive the expected timer value based on the length of
-        // the received message, but we won't actually know that until (a) after that message is
-        // received and (b) when the RX buffer is read in the main() busy-loop.
-        if (g_ui32ExpCtrl & SYNC_0PHASE && g_sync == SYNC_MODE_RESET) {
-            timer_val = TimerValueGet(TIMER2_BASE, TIMER_A);
-            if (g_target_id == TARGET_ID) {
-                TimerLoadSet(TIMER2_BASE, TIMER_A, TARGET_XMIT_TIME);
-            } else {
-                TimerLoadSet(TIMER2_BASE, TIMER_A, TARGET_XMIT_TIME_2);
-            }
-            TimerEnable(TIMER2_BASE, TIMER_A);
-            if (timer_val == 0) {
-                g_msg_since_idle = 0;
-            } else {
-                g_msg_since_idle++;
-            }
-        }
+        got_CAN_msg_interrupt();
 
         CANIntClear(CAN0_BASE, ui32Status);
     }
