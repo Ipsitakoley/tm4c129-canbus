@@ -77,9 +77,15 @@ volatile bool g_bRESETFlag = 0;
 volatile bool g_tick = false;
 volatile bool g_tick_2 = false;
 
+/* Synchronization works on a simple state machine.
+ * The initial state is SYNC_MODE_INIT. Transition goes from this state to SYNC_MODE RESET after some delay from start.
+ * The reset state is SYNC_MODE_RESET. In this state, the attacker node attempts to resynchronize with the victim.
+ * The adjustment state is SYNC_MODE_ADJUST. In this state, the attacker is resynchronizing to the victim by adjusting the periodic timers.
+ * The synchronized state is SYNC_MODE_SYNCHED. This state is reached after the adjustment completes.
+ */
 #define SYNC_MODE_INIT       (0)
 #define SYNC_MODE_SYNCHED    (1)
-#define SYNC_MODE_RESYNCH    (2)
+#define SYNC_MODE_RESYNCH    (2)    // UNUSED
 #define SYNC_MODE_ADJUST     (3)
 #define SYNC_MODE_RESET      (4)
 volatile uint8_t g_sync = SYNC_MODE_INIT;
