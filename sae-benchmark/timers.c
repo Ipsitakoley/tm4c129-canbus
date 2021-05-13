@@ -71,6 +71,9 @@ volatile uint32_t g_ui32ErrFlag = 0;
 volatile bool g_bRXFlag = 0;
 volatile bool g_bTXFlag = 0;
 volatile bool g_bTXFlag_5 = 0;
+volatile bool g_bTXFlag_10 = 0;
+volatile bool g_bTXFlag_100 = 0;
+volatile bool g_bTXFlag_1000 = 0;
 volatile bool g_bTXTarget_1 = 0;
 volatile bool g_bTXTarget_2 = 0;
 volatile bool g_bRESETFlag = 0;
@@ -244,6 +247,15 @@ void CAN0IntHandler(void)
             g_bTXTarget_2 = true;
         }
 
+        else if(ui32Status == TXOBJECT_10) {
+            g_bTXFlag_10 = true;
+        }
+        else if(ui32Status == TXOBJECT_100) {
+            g_bTXFlag_100 = true;
+        }
+        else if(ui32Status == TXOBJECT_1000) {
+            g_bTXFlag_1000 = true;
+        }
         else {
             g_bTXFlag = true;
         }
@@ -283,9 +295,13 @@ void send_messages(uint32_t count)
             if (g_sCAN0TxMessage_5) {
                 CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
             }
-            do_attack_injection(count);
+            if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
+                do_attack_injection(count);
+            }
         } else {
-            do_attack_injection(count);
+            if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
+                do_attack_injection(count);
+            }
             if (g_sCAN0TxMessage_5) {
                 CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
             }
@@ -624,6 +640,12 @@ do_switch(int count)
     return true;
 }
 
+void
+got_message(int ID)
+{
+
+}
+
 int
 main(void)
 {
@@ -681,6 +703,7 @@ main(void)
                     }
                 }
             }
+            got_message(TARGET_ID);
             if (g_target_id == TARGET_ID) {
                 CANErrCntrGet(CAN0_BASE, &rec, &tec);
                 UARTprintf("%d\tATK1-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID, rec, tec);
@@ -689,6 +712,7 @@ main(void)
 
         if (g_bTXTarget_2) {
             g_bTXTarget_2 = false;
+            got_message(TARGET_ID_2);
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
             UARTprintf("%d\tATK2-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID_2, rec, tec);
         }
@@ -696,6 +720,8 @@ main(void)
         if (g_bTXFlag_5) {
             g_bTXFlag_5 = false;
             g_ui32TXMsgCount++;
+            got_message(TX_5_ID);
+
             if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
                 if (PRECEDED_ID == HIGH_PRIO_ID) {
                     if ( g_target_id == TARGET_ID ) {
@@ -711,6 +737,40 @@ main(void)
                     // nothing to do.
                 }
             }
+
+#if defined(VERBOSE)
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+        }
+
+        if (g_bTXFlag_10) {
+            g_bTXFlag_10 = false;
+            g_ui32TXMsgCount++;
+            got_message(TX_10_ID);
+
+#if defined(VERBOSE)
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+        }
+
+        if (g_bTXFlag_100) {
+            g_bTXFlag_100 = false;
+            g_ui32TXMsgCount++;
+            got_message(TX_100_ID);
+
+#if defined(VERBOSE)
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+        }
+
+        if (g_bTXFlag_1000) {
+            g_bTXFlag_1000 = false;
+            g_ui32TXMsgCount++;
+            got_message(TX_1000_ID);
+
 #if defined(VERBOSE)
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
             UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
@@ -720,6 +780,7 @@ main(void)
         if (g_bTXFlag) {
             g_bTXFlag = false;
             g_ui32TXMsgCount++;
+            got_message(0);
 #if defined(VERBOSE)
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
             UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
@@ -728,9 +789,11 @@ main(void)
 
         if (g_bRXFlag) {
             g_bRXFlag = false;
+            uint32_t msg_id;
 
             // Read the message
             CANMessageGet(CAN0_BASE, RXOBJECT, &g_sCAN0RxMessage, 0);
+            msg_id = g_sCAN0RxMessage.ui32MsgID;
 
             if(g_sCAN0RxMessage.ui32Flags & MSG_OBJ_DATA_LOST) {
 #if defined(VERBOSE)
@@ -738,12 +801,15 @@ main(void)
 #endif
             }
 
-            if (g_sCAN0RxMessage.ui32MsgID == 0xFF) {
+            if (msg_id == 0xFF) {
                 // The ID 0x01 is used for RESET message.
                 do_reset(count, count_2, g_ui8RXMsgData[0]);
                 count = count_2 = 0;
                 last_target_rcv = 0;
+                continue;
             }
+
+            got_message(msg_id);
 
             if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
                 uint32_t now = TimerValueGet(TIMER3_BASE, TIMER_A);
@@ -757,12 +823,12 @@ main(void)
                 // Disable retransmission of the attack when the preceded message is received
                 // TODO: predict when the target will be bus-off?
                 if ( PRECEDED_ID != HIGH_PRIO_ID && g_target_id == TARGET_ID ) {
-                    if (g_sCAN0RxMessage.ui32MsgID == PRECEDED_ID ) {
+                    if (msg_id == PRECEDED_ID ) {
                         delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
                         CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
                     }
                 } else if (PRECEDED_ID_2 != HIGH_PRIO_ID && g_target_id == TARGET_ID_2) {
-                    if (g_sCAN0RxMessage.ui32MsgID == PRECEDED_ID_2 ) {
+                    if (msg_id == PRECEDED_ID_2 ) {
                         delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
                         CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
                     }
@@ -771,7 +837,7 @@ main(void)
                 }
             }
 
-            if (g_sCAN0RxMessage.ui32MsgID == g_target_id) {
+            if (msg_id == g_target_id) {
                 last_target_rcv = TimerValueGet(TIMER3_BASE, TIMER_A);
                 // check if need to resynchronize
                 if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
