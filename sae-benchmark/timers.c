@@ -641,7 +641,7 @@ do_switch(int count)
 }
 
 void
-got_message(int ID)
+got_message(int ID, bool is_RX)
 {
 
 }
@@ -703,7 +703,7 @@ main(void)
                     }
                 }
             }
-            got_message(TARGET_ID);
+            got_message(TARGET_ID, false);
             if (g_target_id == TARGET_ID) {
                 CANErrCntrGet(CAN0_BASE, &rec, &tec);
                 UARTprintf("%d\tATK1-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID, rec, tec);
@@ -712,7 +712,7 @@ main(void)
 
         if (g_bTXTarget_2) {
             g_bTXTarget_2 = false;
-            got_message(TARGET_ID_2);
+            got_message(TARGET_ID_2, false);
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
             UARTprintf("%d\tATK2-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID_2, rec, tec);
         }
@@ -720,7 +720,7 @@ main(void)
         if (g_bTXFlag_5) {
             g_bTXFlag_5 = false;
             g_ui32TXMsgCount++;
-            got_message(TX_5_ID);
+            got_message(TX_5_ID, false);
 
             if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
                 if (PRECEDED_ID == HIGH_PRIO_ID) {
@@ -747,7 +747,7 @@ main(void)
         if (g_bTXFlag_10) {
             g_bTXFlag_10 = false;
             g_ui32TXMsgCount++;
-            got_message(TX_10_ID);
+            got_message(TX_10_ID, false);
 
 #if defined(VERBOSE)
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
@@ -758,7 +758,7 @@ main(void)
         if (g_bTXFlag_100) {
             g_bTXFlag_100 = false;
             g_ui32TXMsgCount++;
-            got_message(TX_100_ID);
+            got_message(TX_100_ID, false);
 
 #if defined(VERBOSE)
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
@@ -769,7 +769,7 @@ main(void)
         if (g_bTXFlag_1000) {
             g_bTXFlag_1000 = false;
             g_ui32TXMsgCount++;
-            got_message(TX_1000_ID);
+            got_message(TX_1000_ID, false);
 
 #if defined(VERBOSE)
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
@@ -780,7 +780,7 @@ main(void)
         if (g_bTXFlag) {
             g_bTXFlag = false;
             g_ui32TXMsgCount++;
-            got_message(0);
+            got_message(0, false);
 #if defined(VERBOSE)
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
             UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
@@ -809,7 +809,7 @@ main(void)
                 continue;
             }
 
-            got_message(msg_id);
+            got_message(msg_id, true);
 
             if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
                 uint32_t now = TimerValueGet(TIMER3_BASE, TIMER_A);
