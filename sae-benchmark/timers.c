@@ -195,74 +195,44 @@ void CAN0IntHandler(void)
 
     g_ui32LastCANIntTimer = TimerValueGet(TIMER3_BASE, TIMER_A);
 
-    ui32Status = CANIntStatus(CAN0_BASE, CAN_INT_STS_CAUSE);
+    while ((ui32Status = CANIntStatus(CAN0_BASE, CAN_INT_STS_CAUSE)) != 0) {
 
-    if(ui32Status == CAN_INT_INTID_STATUS) {
+        if(ui32Status == CAN_INT_INTID_STATUS) {
+            ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
 
-        ui32Status = CANStatusGet(CAN0_BASE, CAN_STS_CONTROL);
-
-        // if using abort on txerror, check for the tx error condition on the target ID
-        // if an error occurs, just cancel the transmission blindly.
-        if (g_ui32ExpCtrl & DISABLE_RETRANS_TXERR) {
-#if 0
-            uint8_t lec = ui32Status & CAN_STATUS_LEC_MSK;
-            if ( lec == CAN_STATUS_LEC_STUFF || lec == CAN_STATUS_LEC_BIT1 || lec == CAN_STATUS_LEC_BIT0 ) {
-#endif
-            if (ui32Status & CAN_STATUS_LEC_MSK) {
-                if (g_target_id == TARGET_ID ) {
-                    CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
-                } else if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
-                    CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
-
+            // if using abort on txerror, check for the tx error condition on the target ID
+            // if an error occurs, just cancel the transmission blindly.
+            if (g_ui32ExpCtrl & DISABLE_RETRANS_TXERR) {
+                //uint8_t lec = ui32Status & CAN_STATUS_LEC_MSK;
+                //if ( lec == CAN_STATUS_LEC_STUFF || lec == CAN_STATUS_LEC_BIT1 || lec == CAN_STATUS_LEC_BIT0 ) {
+                if (ui32Status & CAN_STATUS_LEC_MSK) {
+                    if (g_target_id == TARGET_ID ) {
+                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
+                    } else if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
+                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+                    }
                 }
             }
-        }
 
-
-        // Errors are handled in CANErrorHandler().
-        g_ui32ErrFlag |= ui32Status;
-    } else {
-        g_ui32ErrFlag = 0; // no errors
-
-        if(ui32Status == RXOBJECT) {
-            g_bRXFlag = true;
-        }
-
+            // Errors are handled in CANErrorHandler().
+            g_ui32ErrFlag |= ui32Status;
+        } else {
+            switch(ui32Status) {
+                case RXOBJECT: g_bRXFlag = true; break;
 #if defined(SEND_RESET)
-        else if(ui32Status == TXOBJECT_RESET)
-        {
-            g_bRESETFlag = true;
-        }
+                case TXOBJECT_RESET: g_bRESETFlag = true; break;
 #endif
-
-        else if(ui32Status == TXOBJECT_5) {
-            g_bTXFlag_5 = true;
-
+                case TXOBJECT_5: g_bTXFlag_5 = true; break;
+                case TXOBJECT_Target_1: g_bTXTarget_1 = true; break;
+                case TXOBJECT_Target_2: g_bTXTarget_2 = true; break;
+                case TXOBJECT_10: g_bTXFlag_10 = true; break;
+                case TXOBJECT_100: g_bTXFlag_100 = true; break;
+                case TXOBJECT_1000: g_bTXFlag_1000 = true; break;
+                default: g_bTXFlag = ui32Status; break;
+            }
+            //got_CAN_msg_interrupt();
+            CANIntClear(CAN0_BASE, ui32Status);
         }
-
-        else if(ui32Status == TXOBJECT_Target_1) {
-            g_bTXTarget_1 = true;
-        }
-        else if(ui32Status == TXOBJECT_Target_2) {
-            g_bTXTarget_2 = true;
-        }
-
-        else if(ui32Status == TXOBJECT_10) {
-            g_bTXFlag_10 = true;
-        }
-        else if(ui32Status == TXOBJECT_100) {
-            g_bTXFlag_100 = true;
-        }
-        else if(ui32Status == TXOBJECT_1000) {
-            g_bTXFlag_1000 = true;
-        }
-        else {
-            g_bTXFlag = true;
-        }
-
-        got_CAN_msg_interrupt();
-
-        CANIntClear(CAN0_BASE, ui32Status);
     }
     IntMasterEnable();
 }
@@ -521,12 +491,14 @@ void do_reset(int count, int count_2, uint32_t offset)
     TimerDisable(TIMER0_BASE, TIMER_A);
     TimerDisable(TIMER1_BASE, TIMER_A);
     TimerDisable(TIMER2_BASE, TIMER_A);
+    TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+    IntDisable(INT_CAN0);
+    CANDisable(CAN0_BASE);
 
     if (g_ui32ExpCtrl & RESET_IMMED) {
         TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
         TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
         TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL);
-        TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
         g_sync = SYNC_MODE_RESET;
     } else if (g_ui32ExpCtrl & RESET_DELAY) {
         TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL + (offset<<17)<<1);
@@ -802,7 +774,7 @@ main(void)
             }
 
             if (msg_id == 0xFF) {
-                // The ID 0x01 is used for RESET message.
+                // The ID 0xFF is used for RESET message.
                 do_reset(count, count_2, g_ui8RXMsgData[0]);
                 count = count_2 = 0;
                 last_target_rcv = 0;

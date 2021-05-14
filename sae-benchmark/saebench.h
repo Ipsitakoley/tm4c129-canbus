@@ -76,7 +76,7 @@ tCANMsgObject g_sCAN0TxMessages[] = {
 };
 tCANMsgObject *g_sCAN0TxMessage_5 = &g_sCAN0TxMessages[0];
 tCANMsgObject *g_sCAN0TxMessage_10 = NULL;
-tCANMsgObject *g_sCAN0TxMessage_100 = &g_sCAN0TxMessages[2];
+tCANMsgObject *g_sCAN0TxMessage_100 = &g_sCAN0TxMessages[1];
 tCANMsgObject *g_sCAN0TxMessage_1000 = NULL;
 #elif defined(DRIVER)
 uint8_t g_ui8TXMsgData_5[] = { 0x11 };

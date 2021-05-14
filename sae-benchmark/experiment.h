@@ -79,6 +79,10 @@
 //uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 uint32_t g_ui32ExpCtrl = 0;
 
+// Comment/Uncomment the following line to send the reset message, usually only one node does this.
+//#define SEND_RESET
+#define RESET_PERIOD_SECONDS (10)
+
 // might need to tune these, based on your chosen attack
 #define RXPM_DELAY_BITS (20) // how many bit times to delay after RXPM to abort
 
@@ -90,10 +94,6 @@ uint32_t g_ui32ExpCtrl = 0;
 // To not use skipping strategy, set these to 1.
 #define SKIP_ATTACK (1)     // inject on the SKIP_ATTACK'th victim transmission
 #define SKIP_ATTACK_2 (2)   // for transitive attacks, second victim injection skip
-
-// Comment/Uncomment the following line to send the reset message, usually only one node does this.
-//#define SEND_RESET
-#define RESET_PERIOD_SECONDS (10)
 
 // Attack Message
 #define TARGET_ID (0xA1)
@@ -122,7 +122,7 @@ uint8_t g_ui8TXMsgData_Target_2[TARGET_DATALEN_2] = { 0xEE, 0xEE, 0xEE  }; // re
 
 int8_t g_ui8RXMsgData[8];
 tCANMsgObject g_sCAN0RxMessage = { .ui32MsgID = 0, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_RX_INT_ENABLE | MSG_OBJ_USE_ID_FILTER, .ui32MsgLen = sizeof(g_ui8RXMsgData), .pui8MsgData = (uint8_t *) &g_ui8RXMsgData };
-tCANMsgObject g_sCAN0RxMessage2 = { .ui32MsgID = PRECEDED_ID, .ui32MsgIDMask = PRECEDED_ID, .ui32Flags = MSG_OBJ_RX_INT_ENABLE | MSG_OBJ_USE_ID_FILTER, .ui32MsgLen = sizeof(g_ui8RXMsgData), .pui8MsgData = (uint8_t *) &g_ui8RXMsgData };
+//tCANMsgObject g_sCAN0RxMessage2 = { .ui32MsgID = PRECEDED_ID, .ui32MsgIDMask = PRECEDED_ID, .ui32Flags = MSG_OBJ_RX_INT_ENABLE | MSG_OBJ_USE_ID_FILTER, .ui32MsgLen = sizeof(g_ui8RXMsgData), .pui8MsgData = (uint8_t *) &g_ui8RXMsgData };
 tCANMsgObject g_sCAN0TxMessage_Target_1 = { .ui32MsgID = TARGET_ID, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_Target_1), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_Target_1 };
 tCANMsgObject g_sCAN0TxMessage_Target_2 = { .ui32MsgID = TARGET_ID_2, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_Target_2), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_Target_2 };
 uint8_t g_ui8TXMsgData_RESET[1] = { 0xFF };
