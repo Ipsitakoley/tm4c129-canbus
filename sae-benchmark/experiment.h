@@ -70,8 +70,8 @@
 // Change the rest of this file as needed to define your experimental setup
 //----------------------------------------------------------------------------
 #define ATTACK      ATTACK_TRANSITIVE
-#define SYNC        SYNC_0PHASE
-#define RESET       RESET_IMMED
+#define SYNC        SYNC_PERIOD
+#define RESET       RESET_DELAY
 #define RETRANS     DISABLE_RETRANS_TXERR
 
 // this inherits from the above block of defines.
@@ -93,10 +93,10 @@ uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 // This is done by specifying which injection to transmit on, so skip n-1 transmissions, inject on n'th
 // To not use skipping strategy, set these to 1.
 #define SKIP_ATTACK (1)     // inject on the SKIP_ATTACK'th victim transmission
-#define SKIP_ATTACK_2 (2)   // for transitive attacks, second victim injection skip
+#define SKIP_ATTACK_2 (1)   // for transitive attacks, second victim injection skip
 
 // Attack Message
-#define TARGET_ID (0xA1)
+#define TARGET_ID (0xB1)
 #define PRECEDED_ID (0xA0)  // used in RXPM
 #define TARGET_DATALEN (2)
 

