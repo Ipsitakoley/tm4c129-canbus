@@ -96,7 +96,7 @@ uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 #define SKIP_ATTACK_2 (1)   // for transitive attacks, second victim injection skip
 
 // Attack Message
-#define TARGET_ID (0xB1)
+#define TARGET_ID (0xA1)
 #define PRECEDED_ID (0xA0)  // used in RXPM
 #define TARGET_DATALEN (2)
 
