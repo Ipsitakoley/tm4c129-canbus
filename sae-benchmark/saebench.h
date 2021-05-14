@@ -35,8 +35,8 @@
 #define NULL ((void*)0)
 #endif
 
-#define VC
-//#define BRAKES
+//#define VC
+#define BRAKES
 //#define DRIVER
 //#define BATTERY
 //#define IMC
@@ -75,7 +75,7 @@ tCANMsgObject g_sCAN0TxMessages[] = {
 { .ui32MsgID = 0xC1, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_100), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_100 }
 };
 tCANMsgObject *g_sCAN0TxMessage_5 = &g_sCAN0TxMessages[0];
-tCANMsgObject *g_sCAN0TxMessage_10 = NULL
+tCANMsgObject *g_sCAN0TxMessage_10 = NULL;
 tCANMsgObject *g_sCAN0TxMessage_100 = &g_sCAN0TxMessages[2];
 tCANMsgObject *g_sCAN0TxMessage_1000 = NULL;
 #elif defined(DRIVER)

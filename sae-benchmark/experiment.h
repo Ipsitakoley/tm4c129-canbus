@@ -76,7 +76,8 @@
 
 // this inherits from the above block of defines.
 // Don't change this variable, instead change the defines. they get used elsewhere too.
-uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
+//uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
+uint32_t g_ui32ExpCtrl = 0;
 
 // might need to tune these, based on your chosen attack
 #define RXPM_DELAY_BITS (20) // how many bit times to delay after RXPM to abort
@@ -91,7 +92,7 @@ uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 #define SKIP_ATTACK_2 (2)   // for transitive attacks, second victim injection skip
 
 // Comment/Uncomment the following line to send the reset message, usually only one node does this.
-#define SEND_RESET
+//#define SEND_RESET
 #define RESET_PERIOD_SECONDS (10)
 
 // Attack Message
