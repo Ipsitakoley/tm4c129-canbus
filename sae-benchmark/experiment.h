@@ -76,11 +76,11 @@
 
 // this inherits from the above block of defines.
 // Don't change this variable, instead change the defines. they get used elsewhere too.
-//uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
-uint32_t g_ui32ExpCtrl = 0;
+uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
+//uint32_t g_ui32ExpCtrl = 0;
 
 // Comment/Uncomment the following line to send the reset message, usually only one node does this.
-//#define SEND_RESET
+#define SEND_RESET
 #define RESET_PERIOD_SECONDS (10)
 
 // might need to tune these, based on your chosen attack

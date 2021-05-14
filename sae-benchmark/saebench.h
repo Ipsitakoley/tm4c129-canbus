@@ -35,8 +35,8 @@
 #define NULL ((void*)0)
 #endif
 
-//#define VC
-#define BRAKES
+#define VC
+//#define BRAKES
 //#define DRIVER
 //#define BATTERY
 //#define IMC

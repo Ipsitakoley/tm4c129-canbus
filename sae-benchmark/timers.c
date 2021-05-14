@@ -230,7 +230,7 @@ void CAN0IntHandler(void)
                 case TXOBJECT_1000: g_bTXFlag_1000 = true; break;
                 default: g_bTXFlag = ui32Status; break;
             }
-            //got_CAN_msg_interrupt();
+            got_CAN_msg_interrupt();
             CANIntClear(CAN0_BASE, ui32Status);
         }
     }
