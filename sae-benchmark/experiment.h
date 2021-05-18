@@ -76,8 +76,8 @@
 
 // this inherits from the above block of defines.
 // Don't change this variable, instead change the defines. they get used elsewhere too.
-uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
-//uint32_t g_ui32ExpCtrl = 0;
+//uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
+uint32_t g_ui32ExpCtrl = 0;
 
 // Comment/Uncomment the following line to send the reset message, usually only one node does this.
 #define SEND_RESET
@@ -127,36 +127,6 @@ tCANMsgObject g_sCAN0TxMessage_Target_1 = { .ui32MsgID = TARGET_ID, .ui32MsgIDMa
 tCANMsgObject g_sCAN0TxMessage_Target_2 = { .ui32MsgID = TARGET_ID_2, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_Target_2), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_Target_2 };
 uint8_t g_ui8TXMsgData_RESET[1] = { 0xFF };
 tCANMsgObject g_sCAN0TxMessage_RESET = { .ui32MsgID = 0xFF, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_RESET), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_RESET };
-
-//----------------------------------------------------------------------------
-// You should not need to change the following.
-//----------------------------------------------------------------------------
-// Determine the relative priorities of the TARGET_ID, TARGET_ID_2, and the highest priority message normally sent.
-#if (HIGH_PRIO_ID < TARGET_ID && TARGET_ID < TARGET_ID_2)
-#define PRIORITY_Target_1 (MID_PRIO)
-#define HIGHEST_TX_PRIORITY (HIGH_PRIO)
-#define PRIORITY_Target_2 (LOW_PRIO)
-#elif (HIGH_PRIO_ID < TARGET_ID_2 && TARGET_ID_2 < TARGET_ID)
-#define PRIORITY_Target_1 (LOW_PRIO)
-#define HIGHEST_TX_PRIORITY (HIGH_PRIO)
-#define PRIORITY_Target_2 (MID_PRIO)
-#elif (TARGET_ID < HIGH_PRIO_ID  && HIGH_PRIO_ID < TARGET_ID_2)
-#define PRIORITY_Target_1 (HIGH_PRIO)
-#define HIGHEST_TX_PRIORITY (MID_PRIO)
-#define PRIORITY_Target_2 (LOW_PRIO)
-#elif (TARGET_ID_2 < HIGH_PRIO_ID  && HIGH_PRIO_ID < TARGET_ID)
-#define PRIORITY_Target_1 (LOW_PRIO)
-#define HIGHEST_TX_PRIORITY (MID_PRIO)
-#define PRIORITY_Target_2 (HIGH_PRIO)
-#elif (TARGET_ID < TARGET_ID_2)
-#define PRIORITY_Target_1 (HIGH_PRIO)
-#define HIGHEST_TX_PRIORITY (LOW_PRIO)
-#define PRIORITY_Target_2 (MID_PRIO)
-#else
-#define PRIORITY_Target_1 (MID_PRIO)
-#define HIGHEST_TX_PRIORITY (LOW_PRIO)
-#define PRIORITY_Target_2 (HIGH_PRIO)
-#endif
 
 
 

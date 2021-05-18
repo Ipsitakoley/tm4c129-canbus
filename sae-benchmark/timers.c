@@ -113,6 +113,33 @@ volatile uint32_t g_target_id = 0;
 volatile uint32_t g_ui32TargetXmitTime = 0;
 volatile uint8_t g_skip_attack = SKIP_ATTACK;
 
+// Determine the relative priorities of the TARGET_ID, TARGET_ID_2, and the highest priority message normally sent.
+#if (HIGH_PRIO_ID < TARGET_ID && TARGET_ID < TARGET_ID_2)
+#define PRIORITY_Target_1 (MID_PRIO)
+#define HIGHEST_TX_PRIORITY (HIGH_PRIO)
+#define PRIORITY_Target_2 (LOW_PRIO)
+#elif (HIGH_PRIO_ID < TARGET_ID_2 && TARGET_ID_2 < TARGET_ID)
+#define PRIORITY_Target_1 (LOW_PRIO)
+#define HIGHEST_TX_PRIORITY (HIGH_PRIO)
+#define PRIORITY_Target_2 (MID_PRIO)
+#elif (TARGET_ID < HIGH_PRIO_ID  && HIGH_PRIO_ID < TARGET_ID_2)
+#define PRIORITY_Target_1 (HIGH_PRIO)
+#define HIGHEST_TX_PRIORITY (MID_PRIO)
+#define PRIORITY_Target_2 (LOW_PRIO)
+#elif (TARGET_ID_2 < HIGH_PRIO_ID  && HIGH_PRIO_ID < TARGET_ID)
+#define PRIORITY_Target_1 (LOW_PRIO)
+#define HIGHEST_TX_PRIORITY (MID_PRIO)
+#define PRIORITY_Target_2 (HIGH_PRIO)
+#elif (TARGET_ID < TARGET_ID_2)
+#define PRIORITY_Target_1 (HIGH_PRIO)
+#define HIGHEST_TX_PRIORITY (LOW_PRIO)
+#define PRIORITY_Target_2 (MID_PRIO)
+#else
+#define PRIORITY_Target_1 (MID_PRIO)
+#define HIGHEST_TX_PRIORITY (LOW_PRIO)
+#define PRIORITY_Target_2 (HIGH_PRIO)
+#endif
+
 #define RXOBJECT_RESET      14
 #define TXOBJECT_RESET      RXOBJECT_RESET
 #define TXOBJECT_5          HIGHEST_TX_PRIORITY
