@@ -69,15 +69,15 @@
 //----------------------------------------------------------------------------
 // Change the rest of this file as needed to define your experimental setup
 //----------------------------------------------------------------------------
-#define ATTACK      ATTACK_TRANSITIVE
-#define SYNC        SYNC_PERIOD
-#define RESET       RESET_DELAY
+#define ATTACK      ATTACK_RECESSIVE
+#define SYNC        SYNC_0PHASE
+#define RESET       RESET_IMMED
 #define RETRANS     DISABLE_RETRANS_TXERR
 
 // this inherits from the above block of defines.
 // Don't change this variable, instead change the defines. they get used elsewhere too.
-//uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
-uint32_t g_ui32ExpCtrl = 0;
+uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
+//uint32_t g_ui32ExpCtrl = 0;
 
 // Comment/Uncomment the following line to send the reset message, usually only one node does this.
 #define SEND_RESET
@@ -95,9 +95,9 @@ uint32_t g_ui32ExpCtrl = 0;
 #define SKIP_ATTACK (1)     // inject on the SKIP_ATTACK'th victim transmission
 #define SKIP_ATTACK_2 (1)   // for transitive attacks, second victim injection skip
 
-// Attack Message
+// Attack Message -- Brakes
 #define TARGET_ID (0xA1)
-#define PRECEDED_ID (0xA0)  // used in RXPM
+#define PRECEDED_ID (HIGH_PRIO_ID)  // used in RXPM
 #define TARGET_DATALEN (2)
 
 #if (ATTACK == ATTACK_CLASSIC)
