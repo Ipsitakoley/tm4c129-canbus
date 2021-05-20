@@ -69,10 +69,10 @@
 //----------------------------------------------------------------------------
 // Change the rest of this file as needed to define your experimental setup
 //----------------------------------------------------------------------------
-#define ATTACK      ATTACK_RECESSIVE
+#define ATTACK      ATTACK_NONE
 #define SYNC        SYNC_0PHASE
 #define RESET       RESET_IMMED
-#define RETRANS     DISABLE_RETRANS_TXERR
+#define RETRANS     DISABLE_RETRANS_NONE
 
 // this inherits from the above block of defines.
 // Don't change this variable, instead change the defines. they get used elsewhere too.

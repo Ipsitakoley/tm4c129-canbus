@@ -341,7 +341,7 @@ void send_messages(uint32_t count)
             g_pin0 ^= 1;
             GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_0, g_pin0);
             if (g_sCAN0TxMessage_1000) {
-                CANMessageSet(CAN0_BASE, TXOBJECT_100, g_sCAN0TxMessage_1000, MSG_OBJ_TYPE_TX);
+                CANMessageSet(CAN0_BASE, TXOBJECT_1000, g_sCAN0TxMessage_1000, MSG_OBJ_TYPE_TX);
             }
         }
     }
@@ -557,10 +557,10 @@ void do_reset(int count, int count_2, uint32_t offset)
     g_bTXFlag_5 = g_bTXFlag = g_bRXFlag = false;
 
     g_pin0 = g_pin_2 = 0;
+    g_target_id = TARGET_ID;
+    g_ui32TargetXmitTime = TARGET_XMIT_TIME;
 
     if (g_ui32ExpCtrl & ATTACK_MASK) {
-        g_target_id = TARGET_ID;
-        g_ui32TargetXmitTime = TARGET_XMIT_TIME;
         g_skip_attack = SKIP_ATTACK;
     }
 
@@ -628,10 +628,8 @@ initialize(void)
     TimerConfigure(TIMER3_BASE, TIMER_CFG_PERIODIC);
     TimerLoadSet(TIMER3_BASE, TIMER_A, 0x10000000);
 
-    if (g_ui32ExpCtrl & ATTACK_MASK) {
-        g_target_id = TARGET_ID;
-        g_ui32TargetXmitTime = TARGET_XMIT_TIME;
-    }
+    g_target_id = TARGET_ID;
+    g_ui32TargetXmitTime = TARGET_XMIT_TIME;
 
     // Setup the CAN and UART
     InitCAN0();
