@@ -730,7 +730,7 @@ got_rx_message(int ID, int count)
                 if (g_sync == SYNC_MODE_RESET && g_msg_since_idle == 0) { /* g_msg_since_idle always 0 with SYNC_PERIOD */
                     TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
                     uint32_t delta = g_ui32LastCANIntTimer - g_last_target_rcv; // counting down, so start - end = delta
-                    TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL-delta-(TARGET_XMIT_TIME*6)); /* FIXME: 6 is magic. */
+                    TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL-delta-(TARGET_XMIT_TIME*11/2)); /* FIXME: 6 is magic. */
                     TimerEnable(TIMER2_BASE, TIMER_A);
                     g_sync = SYNC_MODE_ADJUST;
                     TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);

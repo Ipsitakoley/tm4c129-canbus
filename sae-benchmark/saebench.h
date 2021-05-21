@@ -38,9 +38,9 @@
 //#define VC
 //#define BRAKES
 //#define DRIVER
-#define BATTERY
+//#define BATTERY
 //#define IMC
-//#define TRANS
+#define TRANS
 
 
 /* Benchmark TX Objects */
