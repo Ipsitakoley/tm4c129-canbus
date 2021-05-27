@@ -171,28 +171,28 @@ __error__(char *pcFilename, uint32_t ui32Line)
 }
 #endif
 
-void delay_us(uint32_t delay)
+void delay_ticks(uint32_t ticks)
 {
     uint32_t start = 0;
     uint32_t end = 1;
     // in case of an overflow.
     while (end >= start) { // loop in case of an overflow
         start = TimerValueGet(TIMER3_BASE, TIMER_A);
-        end = start - delay*TICKS_PER_US; // timer3 is a free-running, countdown timer.
+        end = start - ticks; // timer3 is a free-running, countdown timer.
     }
     while (start > end) {
         start = TimerValueGet(TIMER3_BASE, TIMER_A);
     }
 }
 
+void delay_us(uint32_t delay)
+{
+    delay_ticks(delay*TICKS_PER_US);
+}
+
 void delay_ms(uint32_t delay)
 {
     delay_us(delay*1000);
-}
-
-void delay_ticks(uint32_t ticks)
-{
-    delay_us(ticks/TICKS_PER_US);
 }
 
 static inline void got_CAN_msg_interrupt(uint32_t ID)
