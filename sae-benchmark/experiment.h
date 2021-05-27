@@ -114,7 +114,8 @@ uint8_t g_ui8TXMsgData_Target_2[TARGET_DATALEN_2] = { 0xEE, 0xEE, 0xEE  }; // re
 
 // Uncomment this to turn on some extra print statements.
 // They can mess with timing, recommended to disable except when debugging.
-//#define VERBOSE
+#define VERBOSE
+//#define VVERBOSE
 
 // You shouldn't need to change these:
 #define TARGET_XMIT_TIME ((44+(TARGET_DATALEN*8)*120000)/(BITRATE/1000)) // approx. and subject to stuff bits

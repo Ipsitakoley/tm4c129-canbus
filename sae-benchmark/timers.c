@@ -81,6 +81,7 @@ volatile bool g_tick = false;
 volatile bool g_tick_2 = false;
 
 uint32_t g_last_target_rcv = 0;
+uint32_t g_last_sporadic_tx = 0;
 
 /* Synchronization works on a simple state machine.
  * The initial state is SYNC_MODE_INIT. Transition goes from this state to SYNC_MODE RESET after some delay from start.
@@ -140,23 +141,23 @@ volatile uint8_t g_skip_attack = SKIP_ATTACK;
 #define HIGHEST_TX_PRIORITY (LOW_PRIO)
 #define PRIORITY_Target_2 (HIGH_PRIO)
 #endif
-*/
-#define PRIORITY_Target_1 (MID_PRIO)
-#define HIGHEST_TX_PRIORITY (HIGH_PRIO)
-#define PRIORITY_Target_2 (LOW_PRIO)
 
-#define RXOBJECT_RESET      14
-#define TXOBJECT_RESET      RXOBJECT_RESET
+#endif
+
+#define TXOBJECT_URGENT     2
 #define TXOBJECT_5          HIGHEST_TX_PRIORITY
 #define TXOBJECT_Target_1   PRIORITY_Target_1
 #define TXOBJECT_Target_2   PRIORITY_Target_2
 #define TXOBJECT_RESERVED1  6
-#define TXOBJECT_RESERVED2  7
-#define TXOBJECT_10         9
+#define TXOBJECT_10         7
+#define TXOBJECT_RESERVED2  8
+#define TXOBJECT_20         9
+#define TXOBJECT_RESERVED3  10
 #define TXOBJECT_100        11
-#define TXOBJECT_RESERVED3  12
+#define TXOBJECT_RESERVED5  12
 #define TXOBJECT_1000       13
-
+#define RXOBJECT_RESET      14
+#define TXOBJECT_RESET      RXOBJECT_RESET
 #define RXOBJECT_RESERVED1  15
 #define RXOBJECT            16
 
@@ -302,7 +303,17 @@ void do_attack_injection()
 
 void send_messages(uint32_t count)
 {
+#if defined(SPORADIC_MSG_IAT)
+    bool can_send_sporadic = false;
+    if ( (count - g_last_sporadic_tx) > (SPORADIC_MSG_IAT/5) ) {
+        can_send_sporadic = true;
+    }
+#endif
+
     if (g_reset == false) {
+#if defined(SIMULATE_JITTER)
+        delay_ticks(g_ui8TXMsgData_RESET[0]);
+#endif
         if (HIGH_PRIO_ID < g_target_id ) {
             if (g_sCAN0TxMessage_5) {
                 CANMessageSet(CAN0_BASE, TXOBJECT_5, g_sCAN0TxMessage_5, MSG_OBJ_TYPE_TX);
@@ -329,6 +340,16 @@ void send_messages(uint32_t count)
                 CANMessageSet(CAN0_BASE, TXOBJECT_Target_1, &g_sCAN0TxMessage_Target_1, MSG_OBJ_TYPE_TX);
             }
         }
+
+#if defined(SPORADIC_MSG_IAT)
+        if (can_send_sporadic == true) {
+            if (!g_ui8TXMsgData_RESET[0] || count % g_ui8TXMsgData_RESET[0] == 0) {
+                CANMessageSet(CAN0_BASE, TXOBJECT_URGENT, g_sCAN0TxMessage_sporadic, MSG_OBJ_TYPE_TX);
+                g_last_sporadic_tx = count;
+                g_ui8TXMsgData_RESET[0]++;
+            }
+        }
+#endif
 
         if ( count % 2 == 0 && g_sCAN0TxMessage_10) {
             CANMessageSet(CAN0_BASE, TXOBJECT_10, g_sCAN0TxMessage_10, MSG_OBJ_TYPE_TX);
@@ -573,6 +594,9 @@ void do_reset(int count, int count_2, uint32_t offset)
         g_msg_since_idle = 10;
     }
 
+    g_last_target_rcv = 0;
+    g_last_sporadic_tx = 0;
+
     TimerEnable(TIMER0_BASE, TIMER_A);
     //TimerEnable(TIMER1_BASE, TIMER_A);
     TimerEnable(TIMER2_BASE, TIMER_A);
@@ -674,11 +698,13 @@ got_tx_message(int ID, int count)
 
     if (g_target_id == ID) {
         CANErrCntrGet(CAN0_BASE, &rec, &tec);
-        UARTprintf("%d\tATK-TX %d\tREC\t%u\tTEC\t%u\n", count, ID, rec, tec);
+        UARTprintf("%d\tATK-TX\t%d\tREC\t%u\tTEC\t%u\n", count, ID, rec, tec);
     }
 #if defined(VERBOSE)
+    else {
             CANErrCntrGet(CAN0_BASE, &rec, &tec);
-            UARTprintf("%d\tTX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+            UARTprintf("%d\tTX\t%d\tREC\t%u\tTEC\t%u\n", count, ID, rec, tec);
+    }
 #endif
 }
 
@@ -742,10 +768,10 @@ got_rx_message(int ID, int count)
             }
         }
     }
-#if defined(VERBOSE)
+#if defined(VVERBOSE)
     // FIXME: print received target1 and target2 messages after attack presumed successful.
         CANErrCntrGet(CAN0_BASE, &rec, &tec);
-        UARTprintf("%d\tRX\tREC\t%u\tTEC\t%u\n", count, rec, tec);
+        UARTprintf("%d\tRX\t%d\tREC\t%u\tTEC\t%u\n", count, ID, rec, tec);
 #endif
     return rv;
 }
@@ -777,7 +803,6 @@ main(void)
             // this flag is set when this node transmitted the reset message
             do_reset(count, count_2, g_ui8TXMsgData_RESET[0]);
             count = count_2 = 0;
-            g_last_target_rcv = 0;
         }
 
         if (g_tick == true) {
@@ -858,7 +883,6 @@ main(void)
                 // The ID 0xFF is used for RESET message.
                 do_reset(count, count_2, g_ui8RXMsgData[0]);
                 count = count_2 = 0;
-                g_last_target_rcv = 0;
                 continue;
             }
 

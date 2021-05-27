@@ -65,19 +65,23 @@ tCANMsgObject *g_sCAN0TxMessage_1000 = &g_sCAN0TxMessages[2];
 #elif defined(BRAKES)
 uint8_t g_ui8TXMsgData_5[] = { 0x66, 0x7C };
 uint8_t g_ui8TXMsgData_100[] = { 0xC0 };
+uint8_t g_ui8TXMsgData_sporadic[] = { 0x78 };
 #define HIGH_PRIO_ID 0xA1
 #define TX_5_ID 0xA1
 #define TX_10_ID 0x00
 #define TX_100_ID 0xC1
 #define TX_1000_ID 0x00
+#define SPORADIC_MSG_IAT (100)
 tCANMsgObject g_sCAN0TxMessages[] = {
 { .ui32MsgID = 0xA1, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_5), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_5 },
-{ .ui32MsgID = 0xC1, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_100), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_100 }
+{ .ui32MsgID = 0xC1, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_100), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_100 },
+{ .ui32MsgID = 0xB9, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_sporadic), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_sporadic }
 };
 tCANMsgObject *g_sCAN0TxMessage_5 = &g_sCAN0TxMessages[0];
 tCANMsgObject *g_sCAN0TxMessage_10 = NULL;
 tCANMsgObject *g_sCAN0TxMessage_100 = &g_sCAN0TxMessages[1];
 tCANMsgObject *g_sCAN0TxMessage_1000 = NULL;
+tCANMsgObject *g_sCAN0TxMessage_sporadic = &g_sCAN0TxMessages[2];
 #elif defined(DRIVER)
 uint8_t g_ui8TXMsgData_5[] = { 0x11 };
 uint8_t g_ui8TXMsgData_10[] = { 0xAF, 0xBC };
@@ -98,20 +102,24 @@ tCANMsgObject *g_sCAN0TxMessage_1000 = NULL;
 uint8_t g_ui8TXMsgData_10[] = { 0x86 };
 uint8_t g_ui8TXMsgData_100[] = { 0x24, 0x33, 0x41, 0xA2 };
 uint8_t g_ui8TXMsgData_1000[] = { 0xB0, 0xB2, 0xB4 };
+uint8_t g_ui8TXMsgData_sporadic[] = { 0x87 };
 #define HIGH_PRIO_ID 0xB2
 #define TX_5_ID 0x00
 #define TX_10_ID 0xB2
 #define TX_100_ID 0xC2
 #define TX_1000_ID 0xD2
+#define SPORADIC_MSG_IAT (1000)
 tCANMsgObject g_sCAN0TxMessages[] = {
 { .ui32MsgID = 0xB2, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_10), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_10 },
 { .ui32MsgID = 0xC2, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_100), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_100 },
-{ .ui32MsgID = 0xD2, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_1000), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_1000 }
+{ .ui32MsgID = 0xD2, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_1000), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_1000 },
+{ .ui32MsgID = 0x99, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_TX_INT_ENABLE, .ui32MsgLen = sizeof(g_ui8TXMsgData_sporadic), .pui8MsgData = (uint8_t *)&g_ui8TXMsgData_sporadic }
 };
 tCANMsgObject *g_sCAN0TxMessage_5 = NULL;
 tCANMsgObject *g_sCAN0TxMessage_10 = &g_sCAN0TxMessages[0];
 tCANMsgObject *g_sCAN0TxMessage_100 = &g_sCAN0TxMessages[1];
 tCANMsgObject *g_sCAN0TxMessage_1000 = &g_sCAN0TxMessages[2];
+tCANMsgObject *g_sCAN0TxMessage_sporadic = &g_sCAN0TxMessages[3];
 #elif defined(IMC)
 uint8_t g_ui8TXMsgData_5[] = { 0xC0, 0x7F };
 uint8_t g_ui8TXMsgData_10[] = { 0xC4, 0x1A };
