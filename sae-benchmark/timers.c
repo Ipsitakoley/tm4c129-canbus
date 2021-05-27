@@ -175,8 +175,9 @@ void delay_ticks(uint32_t ticks)
 {
     uint32_t start = 0;
     uint32_t end = 1;
+
     // in case of an overflow.
-    while (end >= start) { // loop in case of an overflow
+    while (end > start) { // loop in case of an overflow
         start = TimerValueGet(TIMER3_BASE, TIMER_A);
         end = start - ticks; // timer3 is a free-running, countdown timer.
     }
