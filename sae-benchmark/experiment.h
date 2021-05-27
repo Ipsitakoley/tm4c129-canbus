@@ -70,7 +70,7 @@
 // Change the rest of this file as needed to define your experimental setup
 //----------------------------------------------------------------------------
 #define ATTACK      ATTACK_CLASSIC
-#define SYNC        (SYNC_PERIOD | SYNC_SBA)
+#define SYNC        SYNC_SBA
 #define RESET       RESET_IMMED
 #define RETRANS     DISABLE_RETRANS_NONE
 
@@ -102,6 +102,7 @@ uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 
 // Attack Message -- Brakes
 #define TARGET_ID (0xA1)
+#define TARGET_PERIOD (5)
 #define PRECEDED_ID (HIGH_PRIO_ID)  // used in RXPM
 #define TARGET_DATALEN (2)
 
@@ -123,8 +124,8 @@ uint8_t g_ui8TXMsgData_Target_2[TARGET_DATALEN_2] = { 0xEE, 0xEE, 0xEE  }; // re
 //#define VVERBOSE
 
 // You shouldn't need to change these:
-#define TARGET_XMIT_TIME ((44+(TARGET_DATALEN*8)*120000)/(BITRATE/1000)) // approx. and subject to stuff bits
-#define TARGET_XMIT_TIME_2 ((44+(TARGET_DATALEN_2*8)*120000)/(BITRATE/1000)) // approx. and subject to stuff bits
+#define TARGET_XMIT_TIME (((44+TARGET_DATALEN*8)*120000)/(BITRATE/1000)) // approx. and subject to stuff bits
+#define TARGET_XMIT_TIME_2 (((44+TARGET_DATALEN_2*8)*120000)/(BITRATE/1000)) // approx. and subject to stuff bits
 
 int8_t g_ui8RXMsgData[8];
 tCANMsgObject g_sCAN0RxMessage = { .ui32MsgID = 0, .ui32MsgIDMask = 0, .ui32Flags = MSG_OBJ_RX_INT_ENABLE | MSG_OBJ_USE_ID_FILTER, .ui32MsgLen = sizeof(g_ui8RXMsgData), .pui8MsgData = (uint8_t *) &g_ui8RXMsgData };

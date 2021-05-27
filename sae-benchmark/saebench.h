@@ -35,6 +35,8 @@
 #define NULL ((void*)0)
 #endif
 
+#define HYPERPERIOD (1000)
+
 //#define VC
 //#define BRAKES
 //#define DRIVER
