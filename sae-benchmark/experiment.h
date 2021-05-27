@@ -44,7 +44,7 @@
 #define SYNC_NONE           (0x0000)
 #define SYNC_PERIOD         (0x0010)
 #define SYNC_0PHASE         (0x0020)
-#define SYNC_RESERVED1      (0x0040)
+#define SYNC_SBA      (0x0040)
 #define SYNC_RESERVED2      (0x0080)
 #define SYNC_MASK           (0x00F0)
 
@@ -69,24 +69,29 @@
 //----------------------------------------------------------------------------
 // Change the rest of this file as needed to define your experimental setup
 //----------------------------------------------------------------------------
-#define ATTACK      ATTACK_RECESSIVE
-#define SYNC        SYNC_0PHASE
+#define ATTACK      ATTACK_CLASSIC
+#define SYNC        (SYNC_PERIOD | SYNC_SBA)
 #define RESET       RESET_IMMED
-#define RETRANS     DISABLE_RETRANS_TXERR
+#define RETRANS     DISABLE_RETRANS_NONE
 
 // this inherits from the above block of defines.
 // Don't change this variable, instead change the defines. they get used elsewhere too.
 uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 //uint32_t g_ui32ExpCtrl = 0;
 
+// define this to override the prioritization of attack message wrt authentic message in case attacker needs to use their authentic message to block the bus
+//#define USE_CASE_ALIGN_WITH_LOWER_PRIORITY
+
 // Comment/Uncomment the following line to send the reset message, usually only one node does this.
 #define SEND_RESET
 #define RESET_PERIOD_SECONDS (10)
 
+#define SIMULATE_JITTER
+
 // might need to tune these, based on your chosen attack
 #define RXPM_DELAY_BITS (20) // how many bit times to delay after RXPM to abort
 
-// the CAN bus bitrate in Mbps
+// the CAN bus bitrate in bps
 #define BITRATE (500000)
 
 // If using the skipping attack strategy, need to configure how many transmissions to skip.

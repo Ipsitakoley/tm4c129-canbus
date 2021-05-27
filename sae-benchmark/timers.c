@@ -115,7 +115,15 @@ volatile uint32_t g_ui32TargetXmitTime = 0;
 volatile uint8_t g_skip_attack = SKIP_ATTACK;
 
 // Determine the relative priorities of the TARGET_ID, TARGET_ID_2, and the highest priority message normally sent.
-/*
+#if defined(USE_CASE_ALIGN_WITH_LOWER_PRIORITY)
+
+// FIXME: This is hard-coded to demonstrate attack behavior for Trans attacking Brakes
+#define PRIORITY_Target_1 (MID_PRIO)
+#define HIGHEST_TX_PRIORITY (HIGH_PRIO)
+#define PRIORITY_Target_2 (LOW_PRIO)
+
+#else
+
 #if (HIGH_PRIO_ID < TARGET_ID && TARGET_ID < TARGET_ID_2)
 #define PRIORITY_Target_1 (MID_PRIO)
 #define HIGHEST_TX_PRIORITY (HIGH_PRIO)
