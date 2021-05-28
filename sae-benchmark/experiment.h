@@ -92,7 +92,7 @@ uint32_t g_ui32ExpCtrl = (ATTACK | SYNC | RESET | RETRANS);
 #define RXPM_DELAY_BITS (20) // how many bit times to delay after RXPM to abort
 
 // the CAN bus bitrate in bps
-#define BITRATE (500000)
+#define BITRATE (125000)
 
 // If using the skipping attack strategy, need to configure how many transmissions to skip.
 // This is done by specifying which injection to transmit on, so skip n-1 transmissions, inject on n'th
